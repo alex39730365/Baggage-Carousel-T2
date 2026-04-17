@@ -1,0 +1,12 @@
+{
+  "2026-04-17": [
+    { "hour": "22:00", "carousel": 1, "flight": "KE2028 / TPE", "timeStand": "22:35 / 220" },
+    { "hour": "22:00", "carousel": 2, "flight": "KE782 / FUK", "timeStand": "22:35 / 222" },
+    { "hour": "22:00", "carousel": 3, "flight": "KE2006 / HKG", "timeStand": "22:45 / 225" },
+    { "hour": "22:00", "carousel": 4, "flight": "KE458 / DAD", "timeStand": "22:30 / 235" },
+    { "hour": "22:00", "carousel": 6, "flight": "RS704 / NRT", "timeStand": "22:50 / 286" },
+    { "hour": "22:00", "carousel": 7, "flight": "BX165 / NRT", "timeStand": "22:35 / 287" },
+    { "hour": "22:00", "carousel": 10, "flight": "OZ105 / NRT", "timeStand": "22:15 / 260" },
+    { "hour": "23:00", "carousel": 8, "flight": "KE714 / NRT", "timeStand": "23:25 / 234" }
+  ]
+}

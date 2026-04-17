@@ -8,3 +8,13 @@ body,
   margin: 0;
   min-height: 100%;
 }
+
+/* 모바일: 탭 지연 완화, iOS 탭 하이라이트만 살짝 줄임 */
+@layer base {
+  button,
+  [type="button"],
+  [type="submit"],
+  [role="tab"] {
+    touch-action: manipulation;
+  }
+}
