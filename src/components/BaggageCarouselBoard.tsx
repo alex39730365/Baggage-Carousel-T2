@@ -753,7 +753,7 @@ export default function BaggageCarouselBoard() {
             className={
               tableWidthMode === "fit"
                 ? "w-full"
-                : "touch-pan-x overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                : "[touch-action:pan-x_pan-y] overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             }
           >
             <div
@@ -887,7 +887,7 @@ export default function BaggageCarouselBoard() {
         <div
           ref={tableBelowMirrorRef}
           onScroll={onTableBelowMirrorScroll}
-          className="mx-auto flex w-full max-w-[1900px] min-h-10 touch-manipulation touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
+          className="mx-auto flex w-full max-w-[1900px] min-h-10 [touch-action:pan-x_pan-y] items-end overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
         >
           <div ref={tableBelowMirrorInnerRef} className="h-2 shrink-0" />
         </div>
