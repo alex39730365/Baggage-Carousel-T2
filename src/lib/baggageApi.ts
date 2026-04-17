@@ -73,7 +73,8 @@ const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
     "std",
   ]);
   const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime"]);
-  const slotTime = scheduleTime || estimatedTime;
+  /** 예정 도착이 있으면 그 시각으로 날짜·행(시간대)을 잡아, 변경 시 격자/목록이 따라가게 함 */
+  const slotTime = estimatedTime.trim() || scheduleTime.trim() || estimatedTime || scheduleTime;
   const status = pickString(item, [
     "lateral1Status",
     "lateralStatus",
@@ -105,22 +106,60 @@ export const buildHourRows = (): string[] => {
   return Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
 };
 
-const normalizeHourForKey = (hour: string): string => {
-  const t = hour.trim();
-  const hm = t.match(/^(\d{1,2}):(\d{2})/);
-  if (hm) return `${hm[1].padStart(2, "0")}:00`;
-  return t;
-};
+/** 정렬용: `estimatedTime`에서 그날 0시 기준 분(0–1439). 없거나 파싱 실패 시 맨 뒤로. */
+export function getSortableMinuteOfDay(slot: BaggageSlot): number {
+  const raw = (slot.estimatedTime ?? "").trim();
+  if (!raw) return 24 * 60 + 999;
+  const only = raw.replace(/\D/g, "");
+  if (only.length >= 12) {
+    const hh = Number(only.slice(8, 10));
+    const mm = Number(only.slice(10, 12));
+    if (Number.isFinite(hh) && hh >= 0 && hh < 48) {
+      const h = ((Math.floor(hh) % 24) + 24) % 24;
+      const m = Number.isFinite(mm) && mm >= 0 && mm < 60 ? Math.floor(mm) : 0;
+      return h * 60 + m;
+    }
+  }
+  const hm = raw.match(/(\d{1,2}):(\d{2})/);
+  if (hm) {
+    let h = Number(hm[1]);
+    let m = Number(hm[2]);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return 24 * 60 + 998;
+    h = ((Math.floor(h) % 24) + 24) % 24;
+    m = Math.max(0, Math.min(59, Math.floor(m)));
+    return h * 60 + m;
+  }
+  return 24 * 60 + 998;
+}
+
+export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): number {
+  const ta = getSortableMinuteOfDay(a);
+  const tb = getSortableMinuteOfDay(b);
+  if (ta !== tb) return ta - tb;
+  if (a.carousel !== b.carousel) return a.carousel - b.carousel;
+  return a.flight.localeCompare(b.flight);
+}
+
+/** `estimatedTime`(없으면 raw 스케줄) 기준으로 `date`·`hour` 행을 맞춤 — 병합·캐시 후에도 정렬·격자 행이 어긋나지 않게 */
+export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
+  const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime"]).trim();
+  const slotTime = slot.estimatedTime.trim() || scheduleTime;
+  if (!slotTime.trim()) return slot;
+  return {
+    ...slot,
+    date: toDateKey(slotTime),
+    hour: toHour(slotTime),
+  };
+}
 
 /**
- * 같은 날짜·시간대·적재대·편명은 한 칸으로 본다.
- * (estimatedTime 문자열만 다른 중복, 고정 스케줄 vs API `typeOfFlight` 차이 등)
+ * 같은 날짜·적재대·편명은 한 칸으로 본다. (`hour`는 제외 — 예정 시각이 바뀌면 행이 옮겨가야 하므로)
  * `typeOfFlight`는 키에 넣지 않는다 — 고정 행은 빈 값이라 API 행과 이중 표시되기 때문.
+ * 저장된 강조 키(`…|시간대|…`)는 이전 버전과 달라질 수 있음.
  */
 export function getSlotDedupeKey(slot: BaggageSlot): string {
   const flight = slot.flight.trim().toUpperCase().replace(/\s+/g, "");
-  const h = normalizeHourForKey(slot.hour);
-  return `${slot.date}|${h}|${slot.carousel}|${flight}`;
+  return `${slot.date}|${slot.carousel}|${flight}`;
 }
 
 const pickRicherSlot = (a: BaggageSlot, b: BaggageSlot): BaggageSlot => {
@@ -144,7 +183,7 @@ export function dedupeBaggageSlots(slots: BaggageSlot[]): BaggageSlot[] {
     if (!prev) map.set(key, slot);
     else map.set(key, pickRicherSlot(prev, slot));
   }
-  return [...map.values()];
+  return [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
 }
 
 /** 같은 날짜 버킷 안에서 기존 목록과 신규 API 목록을 키 기준으로 합치고, 겹치면 더 신뢰할 행을 남긴다. */
@@ -162,7 +201,7 @@ export function mergeSlotsForDate(date: string, existing: BaggageSlot[], incomin
     if (!prev) map.set(k, sn);
     else map.set(k, pickRicherSlot(prev, sn));
   }
-  return [...map.values()];
+  return [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
 }
 
 export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {

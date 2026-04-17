@@ -1,5 +1,11 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { buildHourRows, dedupeBaggageSlots, fetchBaggageSlots, mergeSlotsForDate } from "../lib/baggageApi";
+import {
+  buildHourRows,
+  compareSlotsByEstimatedArrival,
+  dedupeBaggageSlots,
+  fetchBaggageSlots,
+  mergeSlotsForDate,
+} from "../lib/baggageApi";
 import { BaggageSlot } from "../types";
 import fixedScheduleJson from "../data/fixedSchedule.json";
 
@@ -183,6 +189,9 @@ export function useBaggageData() {
       const list = map.get(key) ?? [];
       list.push(slot);
       map.set(key, list);
+    }
+    for (const list of map.values()) {
+      list.sort(compareSlotsByEstimatedArrival);
     }
     return map;
   }, [slots]);

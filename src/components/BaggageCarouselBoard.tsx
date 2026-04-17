@@ -1,9 +1,10 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaggageData } from "../hooks/useBaggageData";
-import { getSlotDedupeKey } from "../lib/baggageApi";
+import { compareSlotsByEstimatedArrival, getSlotDedupeKey, getSortableMinuteOfDay } from "../lib/baggageApi";
 import { BaggageSlot } from "../types";
 
-const HIGHLIGHT_STORAGE_KEY = "baggage-highlight-keys-v1";
+const HIGHLIGHT_STORAGE_KEY = "baggage-highlight-keys-v2";
 
 const loadHighlightSet = (): Set<string> => {
   if (typeof window === "undefined") return new Set();
@@ -48,9 +49,37 @@ const NAVIGATE_FLASH_MS = 2200;
 const navigateFlashShellClass = "z-[1] bg-sky-100/95 ring-2 ring-sky-400/90";
 
 const FIXED_CAROUSELS = Array.from({ length: 20 }, (_, i) => i + 1);
+
+/** 모바일 격자 보기 확대 (핀치·버튼). */
+const MOBILE_GRID_ZOOM_MIN = 0.55;
+const MOBILE_GRID_ZOOM_MAX = 1.85;
+const MOBILE_GRID_ZOOM_STEP = 0.12;
+const clampMobileGridZoom = (z: number) =>
+  Math.min(MOBILE_GRID_ZOOM_MAX, Math.max(MOBILE_GRID_ZOOM_MIN, z));
 type TabKey = "all" | "terminal1" | "terminal2" | "unknown";
 type DisplayMode = "cards" | "table";
 type TableWidthMode = "scroll" | "fit";
+
+const DISPLAY_MODE_STORAGE_KEY = "baggage-display-mode-v1";
+
+const loadDisplayMode = (): DisplayMode | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+    if (raw === "cards" || raw === "table") return raw;
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
+const persistDisplayMode = (mode: DisplayMode) => {
+  try {
+    localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, mode);
+  } catch {
+    // ignore
+  }
+};
 
 const TAB_ITEMS: { key: TabKey; label: string }[] = [
   { key: "all", label: "전체" },
@@ -164,21 +193,55 @@ export default function BaggageCarouselBoard() {
     useBaggageData();
   const [keyword, setKeyword] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("terminal2");
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(() =>
-    typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches
-      ? "cards"
-      : "table"
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
+    const saved = loadDisplayMode();
+    if (saved) return saved;
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) return "cards";
+    return "table";
+  });
+  /** 모바일(폭 640px 미만)은 기본 `fit` — 가로 스크롤만 쓰면 세로 스크롤이 불편한 경우가 많음 */
+  const [tableWidthMode, setTableWidthMode] = useState<TableWidthMode>(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches ? "fit" : "scroll"
   );
-  const [tableWidthMode, setTableWidthMode] = useState<TableWidthMode>("scroll");
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
+  const tableHScrollRef = useRef<HTMLDivElement>(null);
+  /** 격자와 동기: 모니터 화면 맨 아래 고정 가로 스크롤 미러 */
+  const tableBelowMirrorRef = useRef<HTMLDivElement>(null);
+  const tableBelowMirrorInnerRef = useRef<HTMLDivElement>(null);
+  const [showTableBelowHScroll, setShowTableBelowHScroll] = useState(false);
+  const [isMobileGridViewport, setIsMobileGridViewport] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 639px)").matches : false
+  );
+  const [mobileGridZoom, setMobileGridZoom] = useState(1);
+  const mobileGridZoomRef = useRef(1);
+  const tablePinchWrapRef = useRef<HTMLDivElement>(null);
+  const pinchGestureRef = useRef<{ dist0: number; zoom0: number } | null>(null);
+
+  mobileGridZoomRef.current = mobileGridZoom;
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const upd = () => setIsMobileGridViewport(mq.matches);
+    upd();
+    mq.addEventListener("change", upd);
+    return () => mq.removeEventListener("change", upd);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileGridViewport || displayMode !== "table") setMobileGridZoom(1);
+  }, [isMobileGridViewport, displayMode]);
 
   useEffect(() => {
     return () => {
       if (navigateFlashTimerRef.current !== null) window.clearTimeout(navigateFlashTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    persistDisplayMode(displayMode);
+  }, [displayMode]);
 
   const toggleHighlightKey = useCallback((slotKey: string) => {
     setHighlightKeys((prev) => {
@@ -230,6 +293,115 @@ export default function BaggageCarouselBoard() {
     [slots, activeTab]
   );
 
+  const measureAndSyncTableBelowMirror = useCallback(() => {
+    if (displayMode !== "table" || tableWidthMode !== "scroll") {
+      setShowTableBelowHScroll(false);
+      return;
+    }
+    const main = tableHScrollRef.current;
+    if (!main) {
+      setShowTableBelowHScroll(false);
+      return;
+    }
+    const inner = tablePinchWrapRef.current;
+    const scrollW = Math.max(
+      main.scrollWidth,
+      inner ? Math.max(inner.scrollWidth, inner.offsetWidth) : 0
+    );
+    const mirrorInner = tableBelowMirrorInnerRef.current;
+    if (mirrorInner) mirrorInner.style.width = `${scrollW}px`;
+    const maxScroll = Math.max(0, scrollW - main.clientWidth);
+    const show = maxScroll > 1;
+    setShowTableBelowHScroll(show);
+    const mirror = tableBelowMirrorRef.current;
+    if (show && mirror && Math.abs(mirror.scrollLeft - main.scrollLeft) > 0.5) {
+      mirror.scrollLeft = main.scrollLeft;
+    }
+  }, [displayMode, tableWidthMode]);
+
+  const onTableBelowMirrorScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const main = tableHScrollRef.current;
+    if (!main) return;
+    main.scrollLeft = e.currentTarget.scrollLeft;
+  }, []);
+
+  useEffect(() => {
+    if (displayMode !== "table" || tableWidthMode !== "scroll") {
+      setShowTableBelowHScroll(false);
+      return;
+    }
+    const main = tableHScrollRef.current;
+    const inner = tablePinchWrapRef.current;
+    if (!main) return;
+
+    const run = () => requestAnimationFrame(() => measureAndSyncTableBelowMirror());
+    run();
+
+    const onMainScroll = () => {
+      const mirror = tableBelowMirrorRef.current;
+      if (!mirror) return;
+      if (Math.abs(mirror.scrollLeft - main.scrollLeft) > 0.5) mirror.scrollLeft = main.scrollLeft;
+    };
+    main.addEventListener("scroll", onMainScroll, { passive: true });
+
+    const ro = new ResizeObserver(run);
+    ro.observe(main);
+    if (inner) ro.observe(inner);
+
+    window.addEventListener("resize", run);
+    return () => {
+      main.removeEventListener("scroll", onMainScroll);
+      window.removeEventListener("resize", run);
+      ro.disconnect();
+    };
+  }, [displayMode, tableWidthMode, measureAndSyncTableBelowMirror, visibleSlots, mobileGridZoom]);
+
+  useEffect(() => {
+    if (!isMobileGridViewport || displayMode !== "table") return;
+    const el = tablePinchWrapRef.current;
+    if (!el) return;
+
+    const touchDist = (e: TouchEvent) => {
+      if (e.touches.length < 2) return 0;
+      const a = e.touches[0];
+      const b = e.touches[1];
+      return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const d = touchDist(e);
+        if (d > 1) pinchGestureRef.current = { dist0: d, zoom0: mobileGridZoomRef.current };
+      }
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !pinchGestureRef.current) return;
+      const d = touchDist(e);
+      if (d <= 1) return;
+      const z = clampMobileGridZoom(
+        pinchGestureRef.current.zoom0 * (d / pinchGestureRef.current.dist0)
+      );
+      e.preventDefault();
+      setMobileGridZoom(z);
+    };
+
+    const onEnd = () => {
+      pinchGestureRef.current = null;
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [isMobileGridViewport, displayMode]);
+
   const byHourCarousel = useMemo(() => {
     const map = new Map<string, BaggageSlot[]>();
     for (const slot of visibleSlots) {
@@ -237,6 +409,9 @@ export default function BaggageCarouselBoard() {
       const list = map.get(key) ?? [];
       list.push(slot);
       map.set(key, list);
+    }
+    for (const list of map.values()) {
+      list.sort(compareSlotsByEstimatedArrival);
     }
     return map;
   }, [visibleSlots]);
@@ -248,6 +423,7 @@ export default function BaggageCarouselBoard() {
       .filter((slot) => slot.flight.toUpperCase().includes(q))
       .map((slot) => ({
         dedupeKey: getSlotDedupeKey(slot),
+        sortMin: getSortableMinuteOfDay(slot),
         flight: slot.flight,
         typeOfFlight: slot.typeOfFlight,
         hour: slot.hour,
@@ -260,7 +436,12 @@ export default function BaggageCarouselBoard() {
       if (!unique.has(row.dedupeKey)) unique.set(row.dedupeKey, row);
     }
     return [...unique.values()]
-      .sort((a, b) => `${a.hour}-${a.carousel}`.localeCompare(`${b.hour}-${b.carousel}`))
+      .sort(
+        (a, b) =>
+          a.sortMin - b.sortMin ||
+          a.carousel - b.carousel ||
+          `${a.hour}-${a.flight}`.localeCompare(`${b.hour}-${b.flight}`)
+      )
       .slice(0, 20);
   }, [keyword, visibleSlots]);
 
@@ -279,15 +460,14 @@ export default function BaggageCarouselBoard() {
     }
     const out = new Map<string, BaggageSlot[]>();
     for (const [hour, inner] of map) {
-      const list = [...inner.values()].sort(
-        (a, b) => a.carousel - b.carousel || a.flight.localeCompare(b.flight)
-      );
+      const list = [...inner.values()].sort(compareSlotsByEstimatedArrival);
       out.set(hour, list);
     }
     return out;
   }, [visibleSlots]);
 
   return (
+    <>
     <section className="space-y-3 sm:space-y-4">
       <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
         <h1 className="text-lg font-bold text-slate-900 sm:text-xl">Baggage Carousel 현황</h1>
@@ -475,55 +655,131 @@ export default function BaggageCarouselBoard() {
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-2 border-b border-slate-100 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="격자 너비">
-              <span className="text-[11px] font-medium text-slate-600 sm:text-xs">격자 너비</span>
-              <button
-                type="button"
-                onClick={() => setTableWidthMode("fit")}
-                className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2 sm:py-1 sm:text-xs ${
-                  tableWidthMode === "fit"
-                    ? "border-amber-700 bg-amber-700 text-white"
-                    : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
-                }`}
-              >
-                한 화면에 맞춤
-              </button>
-              <button
-                type="button"
-                onClick={() => setTableWidthMode("scroll")}
-                className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2 sm:py-1 sm:text-xs ${
-                  tableWidthMode === "scroll"
-                    ? "border-amber-700 bg-amber-700 text-white"
-                    : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
-                }`}
-              >
-                가로 스크롤
-              </button>
+            <div
+              className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5"
+              role="group"
+              aria-label="격자 너비"
+            >
+              <span className="shrink-0 text-[11px] font-medium text-slate-600 sm:text-xs">격자 너비</span>
+              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setTableWidthMode("fit")}
+                  title="20개 적재대 열을 화면 너비에 맞춥니다. 글자·칸이 작아질 수 있습니다."
+                  className={`min-w-0 rounded-md border px-2 py-2.5 text-center text-[11px] font-medium leading-snug sm:px-2 sm:py-1 sm:text-xs ${
+                    tableWidthMode === "fit"
+                      ? "border-amber-700 bg-amber-700 text-white"
+                      : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
+                  }`}
+                >
+                  전체 맞춤
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTableWidthMode("scroll")}
+                  title="열 너비를 고정하고 가로로 밀어 봅니다. 왼쪽 시간 열은 고정됩니다."
+                  className={`min-w-0 rounded-md border px-2 py-2.5 text-center text-[11px] font-medium leading-snug sm:px-2 sm:py-1 sm:text-xs ${
+                    tableWidthMode === "scroll"
+                      ? "border-amber-700 bg-amber-700 text-white"
+                      : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
+                  }`}
+                >
+                  가로 보기
+                </button>
+              </div>
             </div>
-            <p className="text-[10px] text-slate-500 sm:text-[11px]">
+            <p className="hidden text-[10px] text-slate-500 sm:block sm:text-[11px]">
               {tableWidthMode === "fit"
-                ? "1~20번 열을 모두 한 화면에 넣습니다. 글자가 작아지고 줄이 바뀔 수 있습니다."
-                : "넓은 격자는 가로 스크롤로 보며, 시간 열은 스크롤 시에도 고정됩니다."}
+                ? "전체 맞춤: 20열을 한 화면에 넣습니다. 글자·칸이 작아질 수 있습니다."
+                : "가로 보기: 화면 맨 아래 고정 가로 스크롤바로 좌우 이동합니다. 시간 열은 고정입니다."}
+            </p>
+            <p className="text-[10px] leading-snug text-slate-500 sm:hidden">
+              {tableWidthMode === "fit"
+                ? "20열을 한 화면에. 글자·칸이 작아질 수 있어요."
+                : "가로로 밀어 넓게 봐요. 화면 밑 고정 스크롤로 좌우 이동. 왼쪽 시간 열만 고정돼요."}
             </p>
           </div>
+          {isMobileGridViewport ? (
+            <div
+              className="flex flex-col gap-1.5 border-b border-slate-100 bg-white px-3 py-2 sm:hidden"
+              role="group"
+              aria-label="격자 확대·축소"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-medium text-slate-600">보기 크기</span>
+                <div className="flex min-h-[44px] flex-1 items-center justify-end gap-1.5">
+                  <button
+                    type="button"
+                    className="flex h-11 min-w-[44px] items-center justify-center rounded-md border border-slate-300 bg-white text-lg font-semibold text-slate-800 active:bg-slate-100 disabled:opacity-40"
+                    aria-label="격자 축소"
+                    disabled={mobileGridZoom <= MOBILE_GRID_ZOOM_MIN + 0.001}
+                    onClick={() =>
+                      setMobileGridZoom((z) => clampMobileGridZoom(z - MOBILE_GRID_ZOOM_STEP))
+                    }
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[3.25rem] text-center text-xs font-semibold tabular-nums text-slate-800">
+                    {Math.round(mobileGridZoom * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    className="flex h-11 min-w-[44px] items-center justify-center rounded-md border border-slate-300 bg-white text-lg font-semibold text-slate-800 active:bg-slate-100 disabled:opacity-40"
+                    aria-label="격자 확대"
+                    disabled={mobileGridZoom >= MOBILE_GRID_ZOOM_MAX - 0.001}
+                    onClick={() =>
+                      setMobileGridZoom((z) => clampMobileGridZoom(z + MOBILE_GRID_ZOOM_STEP))
+                    }
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-[11px] font-medium text-indigo-900 active:bg-indigo-100"
+                    aria-label="보기 크기 초기화"
+                    onClick={() => setMobileGridZoom(1)}
+                  >
+                    100%
+                  </button>
+                </div>
+              </div>
+              <p className="text-[10px] leading-snug text-slate-400">
+                두 손가락으로 벌리거나 모으면 핀치로도 조절할 수 있어요.
+              </p>
+            </div>
+          ) : null}
           <div
+            ref={tableHScrollRef}
             className={
-              tableWidthMode === "fit" ? "w-full" : "touch-pan-x overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]"
+              tableWidthMode === "fit"
+                ? "w-full"
+                : "touch-pan-x overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             }
           >
-            <table
-              className={
-                tableWidthMode === "fit"
-                  ? "w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]"
-                  : "min-w-[980px] table-fixed border-collapse text-[11px] sm:min-w-[1200px] sm:text-xs lg:min-w-[1600px] xl:min-w-[1800px]"
+            <div
+              ref={tablePinchWrapRef}
+              className={`origin-top-left align-top ${
+                tableWidthMode === "scroll" ? "inline-block w-max max-w-none" : ""
+              }`}
+              style={
+                isMobileGridViewport && displayMode === "table"
+                  ? ({ zoom: mobileGridZoom } as CSSProperties)
+                  : undefined
               }
             >
+              <table
+                className={
+                  tableWidthMode === "fit"
+                    ? "w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]"
+                    : "min-w-[680px] table-fixed border-collapse text-[10px] sm:min-w-[760px] sm:text-[11px] md:min-w-[820px] lg:min-w-[880px]"
+                }
+              >
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr>
                   <th
                     className={`border border-slate-200 text-center font-semibold text-slate-700 ${
                       tableWidthMode === "scroll"
-                        ? "sticky left-0 z-20 w-16 bg-slate-50 px-1 py-2 sm:w-20 sm:px-2"
+                        ? "sticky left-0 z-20 w-14 shrink-0 bg-slate-50 px-1 py-1.5 sm:w-16 sm:px-1.5 sm:py-2"
                         : "w-9 bg-slate-50 px-0.5 py-1 sm:w-10 sm:py-1.5"
                     }`}
                   >
@@ -535,7 +791,7 @@ export default function BaggageCarouselBoard() {
                       className={`border border-slate-200 text-center font-semibold text-slate-700 ${
                         tableWidthMode === "fit"
                           ? "min-w-0 px-0.5 py-1 text-[9px] sm:text-[10px]"
-                          : "w-32 px-1 py-2 sm:w-40 sm:px-2 lg:w-52"
+                          : "w-24 shrink-0 px-0.5 py-1.5 sm:w-28 sm:px-1 sm:py-2 md:w-32 md:px-1.5"
                       }`}
                     >
                       {no}
@@ -563,7 +819,7 @@ export default function BaggageCarouselBoard() {
                         <td
                           key={key}
                           className={`border border-slate-200 align-top ${
-                            compact ? "min-h-[52px] p-0.5 sm:min-h-[56px]" : "h-16 sm:h-20"
+                            compact ? "min-h-[52px] p-0.5 sm:min-h-[56px]" : "h-14 sm:h-16"
                           }`}
                         >
                           <div className={compact ? "space-y-0.5" : "space-y-1 p-1.5 sm:p-2"}>
@@ -613,9 +869,30 @@ export default function BaggageCarouselBoard() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}
     </section>
+    {displayMode === "table" && tableWidthMode === "scroll" ? (
+      <div
+        className={
+          showTableBelowHScroll
+            ? "pointer-events-auto fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 px-2 py-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom,0px))] shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur-sm"
+            : "pointer-events-none fixed bottom-0 left-0 right-0 z-50 h-0 overflow-hidden border-0 p-0 opacity-0 shadow-none"
+        }
+        role="presentation"
+        aria-hidden
+      >
+        <div
+          ref={tableBelowMirrorRef}
+          onScroll={onTableBelowMirrorScroll}
+          className="mx-auto flex w-full max-w-[1900px] min-h-10 touch-manipulation touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
+        >
+          <div ref={tableBelowMirrorInnerRef} className="h-2 shrink-0" />
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
