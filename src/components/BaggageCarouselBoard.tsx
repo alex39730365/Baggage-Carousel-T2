@@ -1,7 +1,13 @@
 ﻿import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaggageData } from "../hooks/useBaggageData";
-import { compareSlotsByEstimatedArrival, getSlotDedupeKey, getSortableMinuteOfDay } from "../lib/baggageApi";
+import {
+  collapseDuplicateFlightsPreferClassified,
+  compareSlotsByEstimatedArrival,
+  getSlotDedupeKey,
+  getSortableMinuteOfDay,
+  sanitizeFlightDisplay,
+} from "../lib/baggageApi";
 import { BaggageSlot } from "../types";
 
 const HIGHLIGHT_STORAGE_KEY = "baggage-highlight-keys-v2";
@@ -49,6 +55,8 @@ const NAVIGATE_FLASH_MS = 2200;
 const navigateFlashShellClass = "z-[1] bg-sky-100/95 ring-2 ring-sky-400/90";
 
 const FIXED_CAROUSELS = Array.from({ length: 20 }, (_, i) => i + 1);
+/** 목록(cards) 뷰에서 비어 있어도 구간은 반드시 보이게 할 시간대 */
+const LIST_VIEW_ALWAYS_SHOW_HOURS = new Set(["22:00", "23:00"]);
 
 /** 모바일 격자 보기 확대 (핀치·버튼). */
 const MOBILE_GRID_ZOOM_MIN = 0.55;
@@ -114,13 +122,13 @@ const persistKeCodeshareFilter = (on: boolean) => {
 };
 
 /**
- * IATA 2글자 + 숫자 4자리(예: AF5367, DL1234, KE7123)는 코드셰어로 보고 숨김.
+ * IATA 2자 + 숫자 4자리는 코드셰어 표기로 보고 숨김.(7C·KE 등 — `7C`는 앞이 숫자라 [A-Z]{2}로는 잡히지 않음)
  * 예외: KE + 4자리 + 천의 자리 2 또는 8(KE 2000, KE8178 등)만 유지.
- * 3자리·5자리 이상·편명 형식이 다른 경우는 그대로 둔다.
+ * 3자리·5자리 이상·패턴이 다른 편명은 그대로 둔다.
  */
 const shouldKeepSlotWithKeCodeshareFilter = (flight: string): boolean => {
   const compact = flight.trim().toUpperCase().replace(/\s+/g, "");
-  const m = compact.match(/^([A-Z]{2})(\d+)$/);
+  const m = compact.match(/^([A-Z0-9]{2})(\d+)$/);
   if (!m) return true;
   const carrier = m[1];
   const digits = m[2];
@@ -148,6 +156,28 @@ const getAirportCode = (raw: Record<string, unknown>): string => {
   const airport = raw.airport;
   if (typeof airport === "string" && airport.trim()) return airport.trim();
   return "UNK";
+};
+
+/** `BX165 / NRT` 처럼 편명 끝에 이미 공항 코드가 있으면 raw와 중복 표기하지 않음 */
+const tailTokenFromFlight = (flight: string): string | null => {
+  const parts = flight
+    .trim()
+    .split(/\s*\/\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  const last = parts[parts.length - 1]?.toUpperCase() ?? "";
+  if (!last || !/^[A-Z]{2,4}$/.test(last)) return null;
+  return last;
+};
+
+const formatFlightAirportLine = (item: BaggageSlot): string => {
+  const f = sanitizeFlightDisplay((item.flight || "미지정").trim());
+  const code = getAirportCode(item.raw).trim();
+  const tail = tailTokenFromFlight(f);
+  if (code && tail && code.toUpperCase() === tail) return f;
+  if (!code || code === "UNK") return f;
+  return `${f} / ${code}`;
 };
 
 const getStand = (raw: Record<string, unknown>): string => {
@@ -179,10 +209,14 @@ const getTerminalGroup = (raw: Record<string, unknown>): "terminal1" | "terminal
   const terminal = getTerminal(raw);
   if (!terminal) return "unknown";
 
-  // P03은 API에서 관측되며 터미널2 계열로 묶는다. (includes('1') 같은 휴리스틱은 게이트 번호 106→T1 오분류를 일으켜 쓰지 않음)
-  if (terminal === "P01" || terminal === "T1" || terminal === "TERMINAL1") return "terminal1";
-  if (terminal === "P02" || terminal === "P03" || terminal === "T2" || terminal === "TERMINAL2")
-    return "terminal2";
+  /**
+   * IIAC 공공데이터 여객 터미널 코드(공공데이터포털 등 기준):
+   * - P01 제1여객터미널, P02 탑승동(제1 쪽 연계) → 터미널1 탭
+   * - P03 제2여객터미널 → 터미널2 탭
+   * (게이트 문자열에 '1' 포함 같은 추측은 쓰지 않음)
+   */
+  if (terminal === "P01" || terminal === "P02" || terminal === "T1" || terminal === "TERMINAL1") return "terminal1";
+  if (terminal === "P03" || terminal === "T2" || terminal === "TERMINAL2") return "terminal2";
 
   return "unknown";
 };
@@ -194,12 +228,12 @@ const filterByTab = (slots: BaggageSlot[], tab: TabKey): BaggageSlot[] => {
   return slots.filter((slot) => getTerminalGroup(slot.raw) === "unknown");
 };
 
-/** 공공데이터 `typeOfFlight`: O 출발, I·D 도착 등 (표시용). */
+/** 공공데이터 `typeOfFlight`: O 출발, I·D 도착 등 (표시용). 없으면 빈 문자열 → UI에서 생략 */
 const getFlightModeLabel = (typeOfFlight: string | undefined): string => {
   const t = (typeOfFlight ?? "").trim().toUpperCase();
   if (t === "O") return "출발";
   if (t === "I" || t === "D") return "도착";
-  if (!t) return "구분 미표시";
+  if (!t) return "";
   return `구분 ${t}`;
 };
 
@@ -207,13 +241,16 @@ const getFlightModeLabel = (typeOfFlight: string | undefined): string => {
 const excludeOutboundFlights = (slots: BaggageSlot[]): BaggageSlot[] =>
   slots.filter((slot) => (slot.typeOfFlight ?? "").trim().toUpperCase() !== "O");
 
-const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) =>
-  compact ? (
+const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) => {
+  const modeLabel = getFlightModeLabel(item.typeOfFlight);
+  return compact ? (
     <>
       <p className="break-words font-semibold leading-tight text-slate-900">
-        {`${item.flight || "미지정"} / ${getAirportCode(item.raw)}`}
+        {formatFlightAirportLine(item)}
       </p>
-      <p className="leading-tight text-[9px] text-blue-700 sm:text-[10px]">{getFlightModeLabel(item.typeOfFlight)}</p>
+      {!!modeLabel && (
+        <p className="leading-tight text-[9px] text-blue-700 sm:text-[10px]">{modeLabel}</p>
+      )}
       <p className="break-words leading-tight text-slate-700">{`${formatTime(item.estimatedTime)} / ${getStand(item.raw)}`}</p>
       {!!item.pieces && (
         <p className="break-words leading-tight text-slate-600">
@@ -224,9 +261,11 @@ const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean })
   ) : (
     <>
       <p className="font-semibold text-slate-900">
-        {`${item.flight || "미지정"} / ${getAirportCode(item.raw)}`}
+        {formatFlightAirportLine(item)}
       </p>
-      <p className="text-[10px] text-blue-700 sm:text-[11px]">{getFlightModeLabel(item.typeOfFlight)}</p>
+      {!!modeLabel && (
+        <p className="text-[10px] text-blue-700 sm:text-[11px]">{modeLabel}</p>
+      )}
       <p className="text-slate-700">{`${formatTime(item.estimatedTime)} / ${getStand(item.raw)}`}</p>
       {!!item.pieces && (
         <p className="text-slate-600">
@@ -235,6 +274,7 @@ const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean })
       )}
     </>
   );
+};
 
 export default function BaggageCarouselBoard() {
   const { hours, loading, error, lastUpdated, slots, slotsByDate, selectedDate, setSelectedDate } =
@@ -342,7 +382,7 @@ export default function BaggageCarouselBoard() {
     if (hideKeCodeshareFlights) {
       list = list.filter((slot) => shouldKeepSlotWithKeCodeshareFilter(slot.flight));
     }
-    return list;
+    return collapseDuplicateFlightsPreferClassified(list);
   }, [slots, activeTab, hideKeCodeshareFlights]);
 
   const measureAndSyncTableBelowMirror = useCallback(() => {
@@ -559,7 +599,7 @@ export default function BaggageCarouselBoard() {
           <button
             type="button"
             aria-pressed={hideKeCodeshareFlights}
-            title="켜면 XX1234 형(예: AF5367)은 숨기고, KE 2xxx·KE 8xxx만 예외로 남깁니다."
+            title="켜면 7C·AF 등 2자+숫자 4자리는 숨기고, KE 2xxx·KE 8xxx만 예외로 남깁니다."
             onClick={() =>
               setHideKeCodeshareFlights((prev) => {
                 const next = !prev;
@@ -577,7 +617,7 @@ export default function BaggageCarouselBoard() {
           </button>
           {hideKeCodeshareFlights ? (
             <span className="text-[10px] text-slate-500 sm:text-[11px]">
-              XX1234 숨김 · KE 2xxx·8xxx만 예외 표시
+              7C/XX 4자리 숨김 · KE 2xxx·8xxx만 표시
             </span>
           ) : (
             <span className="text-[10px] text-slate-400 sm:text-[11px]">2글자+4자리 편 전부 표시</span>
@@ -650,7 +690,9 @@ export default function BaggageCarouselBoard() {
                 <p>검색 결과가 없습니다.</p>
               ) : (
                 <div className="space-y-1">
-                  {searchRows.map((row) => (
+                  {searchRows.map((row) => {
+                    const mode = getFlightModeLabel(row.typeOfFlight);
+                    return (
                     <button
                       key={row.dedupeKey}
                       type="button"
@@ -662,10 +704,11 @@ export default function BaggageCarouselBoard() {
                       }`}
                       aria-label={`${row.flight} 목록·격자에서 해당 위치로 이동`}
                     >
-                      {row.flight} - {getFlightModeLabel(row.typeOfFlight)} - 시간 {row.time} - 적재대{" "}
-                      {row.carousel}번
+                      {row.flight}
+                      {mode ? ` - ${mode}` : ""} - 시간 {row.time} - 적재대 {row.carousel}번
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -684,12 +727,15 @@ export default function BaggageCarouselBoard() {
             <div className="space-y-6">
               {hours.map((hour) => {
                 const items = cardSlotsByHour.get(hour);
-                if (!items?.length) return null;
+                if (!items?.length && !LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) return null;
                 return (
                   <section key={hour}>
                     <h2 className="mb-2 border-b border-slate-200 pb-1 text-sm font-semibold text-slate-800">
                       {hour}
                     </h2>
+                    {!items?.length ? (
+                      <p className="text-sm text-slate-500">이 시간대에 표시할 항공편이 없습니다.</p>
+                    ) : (
                     <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {items.map((item) => {
                         const slotKey = getSlotDedupeKey(item);
@@ -728,6 +774,7 @@ export default function BaggageCarouselBoard() {
                         );
                       })}
                     </ul>
+                    )}
                   </section>
                 );
               })}

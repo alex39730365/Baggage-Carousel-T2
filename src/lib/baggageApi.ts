@@ -1,9 +1,25 @@
 import { BaggageSlot, RawBaggageItem } from "../types";
 
-const API_URLS = [0, 1, 2].map(
-  (searchDay) =>
-    `/api/baggage-arrivals?numOfRows=1000&pageNo=1&searchDay=${searchDay}&type=json`
-);
+const SEARCH_DAYS = [0, 1, 2] as const;
+const ROWS_PER_PAGE = 1000;
+/** 공공데이터가 하루 1000건을 넘으면 뒤쪽(늦은 시간대)이 잘릴 수 있어 페이지 순회 */
+const MAX_PAGE_PER_DAY = 15;
+
+/** `BX165 / NRT / NRT` 등 연속 동일 토큰 제거 — 표시·검색·중복 키 정리 */
+export function sanitizeFlightDisplay(flight: string): string {
+  const parts = flight
+    .trim()
+    .split(/\s*\/\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    const u = p.toUpperCase();
+    if (out.length && out[out.length - 1].toUpperCase() === u) continue;
+    out.push(p);
+  }
+  return out.join(" / ").trim();
+}
 
 const pickString = (obj: RawBaggageItem, keys: string[]): string => {
   for (const key of keys) {
@@ -15,24 +31,115 @@ const pickString = (obj: RawBaggageItem, keys: string[]): string => {
   return "";
 };
 
-const toHour = (dateText: string): string => {
-  if (!dateText) return "00:00";
-  const onlyDigits = dateText.replace(/\D/g, "");
-  if (onlyDigits.length >= 10) {
-    const hh = onlyDigits.slice(8, 10);
-    return `${hh}:00`;
+const SEOUL_TZ = "Asia/Seoul";
+
+/** 순간(UTC 등) → 서울 달력·시·분 */
+const formatInstantToSeoulWall = (inst: Date): { dateKey: string; hh: number; mm: number } => {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SEOUL_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  });
+  const parts = fmt.formatToParts(inst);
+  const g = (t: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === t)?.value ?? "";
+  const y = g("year");
+  const mo = g("month");
+  const da = g("day");
+  const hs = g("hour");
+  const ms = g("minute");
+  const h = Number(hs);
+  const m = Number(ms);
+  if (!y || !mo || !da || !Number.isFinite(h) || !Number.isFinite(m)) {
+    return { dateKey: "unknown", hh: 0, mm: 0 };
   }
-  const hm = dateText.match(/(\d{1,2}):(\d{2})/);
-  if (hm) return `${hm[1].padStart(2, "0")}:00`;
-  return "00:00";
+  return {
+    dateKey: `${y}-${mo}-${da}`,
+    hh: ((Math.floor(h) % 24) + 24) % 24,
+    mm: Math.max(0, Math.min(59, Math.floor(m))),
+  };
 };
 
-const toDateKey = (dateText: string): string => {
-  const onlyDigits = dateText.replace(/\D/g, "");
-  if (onlyDigits.length >= 8) {
-    return `${onlyDigits.slice(0, 4)}-${onlyDigits.slice(4, 6)}-${onlyDigits.slice(6, 8)}`;
+/**
+ * API 시각 문자열 → 서울 기준 날짜·시·분.
+ * - `YYYYMMDDHHmm…` 연속 숫자(공공데이터): KST 달력으로 그대로 해석
+ * - ISO·Z·오프셋: Instant로 파싱 후 서울로 변환 (UTC로만 오는 값에서 23시가 어긋나는 문제 완화)
+ */
+export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number; mm: number } | null {
+  const t = raw.trim();
+  if (!t) return null;
+
+  const digits = t.replace(/\D/g, "");
+  /** YYYYMMDDHH / YYYYMMDDHHmm / YYYYMMDDHHmmss… — 앞 14자리만 사용(초 이하 무시) */
+  if (/^\d+$/.test(digits) && digits.length >= 10) {
+    const y = digits.slice(0, 4);
+    const mo = digits.slice(4, 6);
+    const da = digits.slice(6, 8);
+    const hh = Number(digits.slice(8, 10));
+    const mm = digits.length >= 12 ? Number(digits.slice(10, 12)) : 0;
+    const monthNum = Number(mo);
+    const dayNum = Number(da);
+    if (
+      !Number.isFinite(monthNum) ||
+      monthNum < 1 ||
+      monthNum > 12 ||
+      !Number.isFinite(dayNum) ||
+      dayNum < 1 ||
+      dayNum > 31 ||
+      !Number.isFinite(hh) ||
+      !Number.isFinite(mm)
+    ) {
+      return null;
+    }
+    return {
+      dateKey: `${y}-${mo}-${da}`,
+      hh: ((Math.floor(hh) % 24) + 24) % 24,
+      mm: Math.max(0, Math.min(59, Math.floor(mm))),
+    };
   }
-  return "unknown";
+
+  const inst = new Date(t);
+  if (!Number.isNaN(inst.getTime())) {
+    return formatInstantToSeoulWall(inst);
+  }
+
+  const hm = t.match(/(\d{1,2}):(\d{2})/);
+  if (hm && digits.length >= 8) {
+    let h = Number(hm[1]);
+    const m = Number(hm[2]);
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      h = ((Math.floor(h) % 24) + 24) % 24;
+      const dateKey = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+      return { dateKey, hh: h, mm: Math.max(0, Math.min(59, Math.floor(m))) };
+    }
+  }
+
+  if (digits.length >= 8) {
+    const dateKey = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+    const hh = digits.length >= 10 ? Number(digits.slice(8, 10)) : 0;
+    if (Number.isFinite(hh)) return { dateKey, hh: ((Math.floor(hh) % 24) + 24) % 24, mm: 0 };
+  }
+
+  if (hm) {
+    let h = Number(hm[1]);
+    const m = Number(hm[2]);
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      h = ((Math.floor(h) % 24) + 24) % 24;
+      return { dateKey: "unknown", hh: h, mm: Math.max(0, Math.min(59, Math.floor(m))) };
+    }
+  }
+
+  return null;
+}
+
+const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
+  const w = parseSeoulWallClock(raw);
+  if (!w) return { dateKey: "unknown", hour: "00:00" };
+  return { dateKey: w.dateKey, hour: `${String(w.hh).padStart(2, "0")}:00` };
 };
 
 const parseCarouselNumbers = (item: RawBaggageItem): number[] => {
@@ -61,20 +168,16 @@ const parseCarouselNumbers = (item: RawBaggageItem): number[] => {
 };
 
 const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
-  const flight = pickString(item, ["flightId", "flightNo", "airlineFlightNo", "airline"]);
+  const flight = sanitizeFlightDisplay(pickString(item, ["flightId", "flightNo", "airlineFlightNo", "airline"]));
   const typeOfFlight = pickString(item, ["typeOfFlight", "flightType"]).toUpperCase();
 
-  const estimatedTime = pickString(item, [
-    "estimatedDatetime",
-    "estimatedDateTime",
-    "estimatedTime",
-    "scheduleDatetime",
-    "scheduleDateTime",
-    "std",
-  ]);
-  const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime"]);
-  /** 예정 도착이 있으면 그 시각으로 날짜·행(시간대)을 잡아, 변경 시 격자/목록이 따라가게 함 */
-  const slotTime = estimatedTime.trim() || scheduleTime.trim() || estimatedTime || scheduleTime;
+  /** 표시·정렬용 (예정 우선) */
+  const estimatedOnly = pickString(item, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]);
+  /** 격자 날짜·시간 행: 스케줄 우선 — 예정이 자정 넘어 다음날 00시로만 바뀐 경우에도 당일 23시대 행에 남김 */
+  const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime", "std"]);
+  const displayTime = estimatedOnly.trim() || scheduleTime.trim();
+  const bucketTime = scheduleTime.trim() || estimatedOnly.trim() || displayTime;
+  const { dateKey, hour } = bucketDateHour(bucketTime);
   const status = pickString(item, [
     "lateral1Status",
     "lateralStatus",
@@ -89,12 +192,12 @@ const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
   if (carousels.length === 0) return [];
 
   return carousels.map((carousel) => ({
-    date: toDateKey(slotTime),
-    hour: toHour(slotTime),
+    date: dateKey,
+    hour,
     carousel,
     flight,
     typeOfFlight,
-    estimatedTime,
+    estimatedTime: displayTime,
     status,
     pieces,
     note,
@@ -106,30 +209,13 @@ export const buildHourRows = (): string[] => {
   return Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
 };
 
-/** 정렬용: `estimatedTime`에서 그날 0시 기준 분(0–1439). 없거나 파싱 실패 시 맨 뒤로. */
+/** 정렬용: `estimatedTime`(표시 시각)을 서울 기준 분(0–1439). 없거나 파싱 실패 시 맨 뒤로. */
 export function getSortableMinuteOfDay(slot: BaggageSlot): number {
   const raw = (slot.estimatedTime ?? "").trim();
   if (!raw) return 24 * 60 + 999;
-  const only = raw.replace(/\D/g, "");
-  if (only.length >= 12) {
-    const hh = Number(only.slice(8, 10));
-    const mm = Number(only.slice(10, 12));
-    if (Number.isFinite(hh) && hh >= 0 && hh < 48) {
-      const h = ((Math.floor(hh) % 24) + 24) % 24;
-      const m = Number.isFinite(mm) && mm >= 0 && mm < 60 ? Math.floor(mm) : 0;
-      return h * 60 + m;
-    }
-  }
-  const hm = raw.match(/(\d{1,2}):(\d{2})/);
-  if (hm) {
-    let h = Number(hm[1]);
-    let m = Number(hm[2]);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) return 24 * 60 + 998;
-    h = ((Math.floor(h) % 24) + 24) % 24;
-    m = Math.max(0, Math.min(59, Math.floor(m)));
-    return h * 60 + m;
-  }
-  return 24 * 60 + 998;
+  const w = parseSeoulWallClock(raw);
+  if (!w) return 24 * 60 + 998;
+  return w.hh * 60 + w.mm;
 }
 
 export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): number {
@@ -140,16 +226,97 @@ export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): 
   return a.flight.localeCompare(b.flight);
 }
 
-/** `estimatedTime`(없으면 raw 스케줄) 기준으로 `date`·`hour` 행을 맞춤 — 병합·캐시 후에도 정렬·격자 행이 어긋나지 않게 */
+/** 스케줄(있으면) → 예정 순으로 격자 `date`·`hour` 행 맞춤 — 병합·캐시 후에도 `normalizeItem`과 동일 규칙 */
 export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
-  const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime"]).trim();
-  const slotTime = slot.estimatedTime.trim() || scheduleTime;
-  if (!slotTime.trim()) return slot;
+  const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime", "std"]).trim();
+  const estimatedOnly = pickString(slot.raw, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]).trim();
+  const displayTime = slot.estimatedTime.trim() || estimatedOnly || scheduleTime;
+  const bucketTime = scheduleTime || estimatedOnly || displayTime;
+  if (!bucketTime.trim()) return slot;
+  const w = parseSeoulWallClock(bucketTime);
+  if (!w) return slot;
+  const hour = `${String(w.hh).padStart(2, "0")}:00`;
+  /** `timeStand` 등으로 달력을 못 잡으면 기존 `date`(날짜 키·`*` 플레이스홀더) 유지 */
+  const dateKey = w.dateKey !== "unknown" ? w.dateKey : slot.date;
   return {
     ...slot,
-    date: toDateKey(slotTime),
-    hour: toHour(slotTime),
+    date: dateKey,
+    hour,
   };
+}
+
+/**
+ * `BX165 / NRT` 와 `BX165` 를 동일 편으로 보아 격자·병합에서 한 칸으로 묶는다.
+ * (첫 `/` 앞의 편명 부분만 사용. 코드셰어 `KE / OZ` 형은 앞 세그먼트 기준)
+ */
+export function canonicalFlightDedupeKey(flight: string): string {
+  const cleaned = sanitizeFlightDisplay(flight);
+  const t = cleaned.trim().toUpperCase();
+  if (!t) return "";
+  const head = t.split(/\s*\/\s*/)[0]?.replace(/\s+/g, "") ?? "";
+  return head;
+}
+
+/** I·D = 도착/국내 도착 등 — 겹치는 줄 중 반드시 이쪽을 남김 */
+const isArrivalLikeType = (s: BaggageSlot): boolean => {
+  const t = (s.typeOfFlight ?? "").trim().toUpperCase();
+  return t === "I" || t === "D";
+};
+
+/** tie-break: API·실데이터 우선, 그다음 예정 길이 */
+const duplicateFlightPickScore = (s: BaggageSlot): number => {
+  const t = (s.typeOfFlight ?? "").trim().toUpperCase();
+  let n = 0;
+  if (t === "O") n += 400;
+  else if (t) n += 250;
+  if (s.note !== "fixedSchedule") n += 500;
+  if (s.status !== "fixed") n += 200;
+  n += Math.min((s.estimatedTime ?? "").length, 150);
+  return n;
+};
+
+const pickSingleSlotFromDuplicateGroup = (group: BaggageSlot[]): BaggageSlot =>
+  [...group].sort((a, b) => {
+    const aa = isArrivalLikeType(a) ? 1 : 0;
+    const bb = isArrivalLikeType(b) ? 1 : 0;
+    if (aa !== bb) return bb - aa;
+    return duplicateFlightPickScore(b) - duplicateFlightPickScore(a);
+  })[0]!;
+
+/** 같은 편이 `unknown`·정상 날짜 등으로 갈라져도 승자 행 날짜를 맞춤 */
+const resolveGroupDate = (group: BaggageSlot[]): string => {
+  const concrete = group.find((s) => s.date && s.date !== "unknown")?.date;
+  return concrete ?? group[0]!.date;
+};
+
+/**
+ * 동일 편(적재대 무시)이 여러 줄이면 하나만 남김. 호출부 배치는 **하루치·한 날짜** 단위(편명만으로 그룹핑 안전).
+ */
+export function collapseDuplicateFlightsPreferClassified(slots: BaggageSlot[]): BaggageSlot[] {
+  const noFlightKey: BaggageSlot[] = [];
+  const groups = new Map<string, BaggageSlot[]>();
+  for (const s of slots) {
+    const fk = canonicalFlightDedupeKey(s.flight);
+    if (!fk) {
+      noFlightKey.push(s);
+      continue;
+    }
+    const g = groups.get(fk) ?? [];
+    g.push(s);
+    groups.set(fk, g);
+  }
+  const out: BaggageSlot[] = [...noFlightKey];
+  for (const g of groups.values()) {
+    if (g.length === 1) {
+      out.push(g[0]!);
+      continue;
+    }
+    let w = pickSingleSlotFromDuplicateGroup(g);
+    const d = resolveGroupDate(g);
+    if (d && w.date !== d) w = { ...w, date: d };
+    out.push(w);
+  }
+  return out.sort(compareSlotsByEstimatedArrival);
 }
 
 /**
@@ -158,11 +325,38 @@ export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
  * 저장된 강조 키(`…|시간대|…`)는 이전 버전과 달라질 수 있음.
  */
 export function getSlotDedupeKey(slot: BaggageSlot): string {
-  const flight = slot.flight.trim().toUpperCase().replace(/\s+/g, "");
+  const flight = canonicalFlightDedupeKey(slot.flight);
   return `${slot.date}|${slot.carousel}|${flight}`;
 }
 
+const hourBucketLead = (h: string): number => {
+  const m = (h ?? "").trim().match(/^(\d{1,2})/);
+  if (!m) return -1;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : -1;
+};
+
+/** 자정 넘김 버킷 보정은 API에 도착(I/D)이 있으면 적용하지 않음 — 도착 행을 우선 */
+const preferFixedOverApiMidnightRow = (fixed: BaggageSlot, api: BaggageSlot): BaggageSlot | null => {
+  if (fixed.note !== "fixedSchedule" || api.note === "fixedSchedule") return null;
+  if (isArrivalLikeType(api)) return null;
+  const fh = hourBucketLead(fixed.hour);
+  const ah = hourBucketLead(api.hour);
+  if (fh >= 22 && ah >= 0 && ah <= 5) return fixed;
+  return null;
+};
+
 const pickRicherSlot = (a: BaggageSlot, b: BaggageSlot): BaggageSlot => {
+  const aAr = isArrivalLikeType(a);
+  const bAr = isArrivalLikeType(b);
+  if (aAr && !bAr) return a;
+  if (!aAr && bAr) return b;
+
+  const midA = preferFixedOverApiMidnightRow(a, b);
+  if (midA) return midA;
+  const midB = preferFixedOverApiMidnightRow(b, a);
+  if (midB) return midB;
+
   const score = (s: BaggageSlot) => {
     let n = 0;
     if ((s.typeOfFlight ?? "").trim()) n += 4;
@@ -172,6 +366,8 @@ const pickRicherSlot = (a: BaggageSlot, b: BaggageSlot): BaggageSlot => {
   };
   const d = score(b) - score(a);
   if (d !== 0) return d > 0 ? b : a;
+  const lenDiff = (b.flight?.length ?? 0) - (a.flight?.length ?? 0);
+  if (lenDiff !== 0) return lenDiff > 0 ? b : a;
   return (b.estimatedTime?.length ?? 0) >= (a.estimatedTime?.length ?? 0) ? b : a;
 };
 
@@ -183,7 +379,8 @@ export function dedupeBaggageSlots(slots: BaggageSlot[]): BaggageSlot[] {
     if (!prev) map.set(key, slot);
     else map.set(key, pickRicherSlot(prev, slot));
   }
-  return [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
+  const merged = [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
+  return collapseDuplicateFlightsPreferClassified(merged);
 }
 
 /** 같은 날짜 버킷 안에서 기존 목록과 신규 API 목록을 키 기준으로 합치고, 겹치면 더 신뢰할 행을 남긴다. */
@@ -201,42 +398,59 @@ export function mergeSlotsForDate(date: string, existing: BaggageSlot[], incomin
     if (!prev) map.set(k, sn);
     else map.set(k, pickRicherSlot(prev, sn));
   }
-  return [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
+  const merged = [...map.values()].map(alignSlotBucketToEstimated).sort(compareSlotsByEstimatedArrival);
+  return collapseDuplicateFlightsPreferClassified(merged);
 }
 
-export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
-  const responses: Response[] = [];
-  let lastError = "";
+const extractItemsArray = (json: unknown): unknown[] => {
+  const itemsNode = (json as { response?: { body?: { items?: unknown } } })?.response?.body?.items;
+  if (Array.isArray(itemsNode)) return itemsNode;
+  if (Array.isArray((itemsNode as { item?: unknown[] })?.item)) return (itemsNode as { item: unknown[] }).item;
+  return [];
+};
 
-  for (const url of API_URLS) {
-    try {
-      const res = await fetch(url, { method: "GET" });
-      if (res.ok) {
-        responses.push(res);
-        continue;
+export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
+  const allSlots: BaggageSlot[] = [];
+  let lastError = "";
+  let anyOk = false;
+
+  for (const searchDay of SEARCH_DAYS) {
+    for (let pageNo = 1; pageNo <= MAX_PAGE_PER_DAY; pageNo++) {
+      const url = `/api/baggage-arrivals?numOfRows=${ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}&type=json`;
+      try {
+        const res = await fetch(url, { method: "GET" });
+        if (!res.ok) {
+          if (res.status === 429) {
+            lastError = "API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.";
+          } else if (pageNo === 1) {
+            lastError = `API 요청 실패 (${res.status})`;
+          }
+          break;
+        }
+        anyOk = true;
+        const json = await res.json();
+        const items = extractItemsArray(json);
+        allSlots.push(...items.flatMap((item) => normalizeItem(item as RawBaggageItem)));
+        if (items.length < ROWS_PER_PAGE) break;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : "요청 실패";
+        break;
       }
-      if (res.status === 429) {
-        lastError = "API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.";
-      } else {
-        lastError = `API 요청 실패 (${res.status})`;
-      }
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : "요청 실패";
     }
   }
-  if (responses.length === 0) throw new Error(lastError || "API 요청 실패");
 
-  const allSlots: BaggageSlot[] = [];
-  for (const response of responses) {
-    const json = await response.json();
-    const itemsNode = json?.response?.body?.items;
-    const items: unknown[] = Array.isArray(itemsNode)
-      ? itemsNode
-      : Array.isArray(itemsNode?.item)
-      ? itemsNode.item
-      : [];
-    allSlots.push(...items.flatMap((item) => normalizeItem(item as RawBaggageItem)));
+  if (!anyOk) throw new Error(lastError || "API 요청 실패");
+  /** 날짜가 섞인 채로 편당 병합하면 다른 날 항공편이 한 줄로 합쳐짐 → 날짜별로 나눔 */
+  const byDate = new Map<string, BaggageSlot[]>();
+  for (const s of allSlots) {
+    const d = s.date || "unknown";
+    const list = byDate.get(d) ?? [];
+    list.push(s);
+    byDate.set(d, list);
   }
-
-  return dedupeBaggageSlots(allSlots);
+  const merged: BaggageSlot[] = [];
+  for (const list of byDate.values()) {
+    merged.push(...dedupeBaggageSlots(list));
+  }
+  return merged;
 }

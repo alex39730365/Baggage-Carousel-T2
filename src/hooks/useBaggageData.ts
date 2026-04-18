@@ -5,13 +5,14 @@ import {
   dedupeBaggageSlots,
   fetchBaggageSlots,
   mergeSlotsForDate,
+  sanitizeFlightDisplay,
 } from "../lib/baggageApi";
 import { BaggageSlot } from "../types";
 import fixedScheduleJson from "../data/fixedSchedule.json";
 
 const REFRESH_MS = 1 * 60 * 1000;
 const JITTER_MS = 20 * 1000;
-const STORAGE_KEY = "baggage-slots-by-date-v6";
+const STORAGE_KEY = "baggage-slots-by-date-v7";
 const STORAGE_META_KEY = "baggage-slots-meta-v1";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -24,29 +25,38 @@ type FixedScheduleEntry = {
 };
 
 const fixedSchedule = fixedScheduleJson as Record<string, FixedScheduleEntry[]>;
+/** 모든 날짜에 병합되는 고정 막바지 시간대(22·23시 등). 키 `*` 또는 `default` */
+const FIXED_WILDCARD_KEYS = new Set(["*", "default"]);
+
+const mapFixedEntries = (date: string, entries: FixedScheduleEntry[]): BaggageSlot[] =>
+  entries.map((entry) => {
+    const fl = sanitizeFlightDisplay(entry.flight);
+    return {
+      date,
+      hour: entry.hour,
+      carousel: entry.carousel,
+      flight: fl,
+      typeOfFlight: "",
+      estimatedTime: entry.timeStand,
+      status: "fixed",
+      pieces: entry.pieces ?? "",
+      note: "fixedSchedule",
+      raw: {
+        terminalId: "P02",
+        airportCode: fl.split(/\s*\/\s*/)[1]?.trim() ?? "N/A",
+        fstandPosition: entry.timeStand.split("/")[1]?.trim() ?? "-",
+      },
+    };
+  });
+
+const fixedWildcardSlots: BaggageSlot[] = dedupeBaggageSlots(
+  mapFixedEntries("*", [...(fixedSchedule["*"] ?? []), ...(fixedSchedule["default"] ?? [])])
+);
 
 const fixedSlotsByDate: Record<string, BaggageSlot[]> = Object.fromEntries(
-  Object.entries(fixedSchedule).map(([date, entries]) => [
-    date,
-    dedupeBaggageSlots(
-      entries.map((entry) => ({
-        date,
-        hour: entry.hour,
-        carousel: entry.carousel,
-        flight: entry.flight,
-        typeOfFlight: "",
-        estimatedTime: entry.timeStand,
-        status: "fixed",
-        pieces: entry.pieces ?? "",
-        note: "fixedSchedule",
-        raw: {
-          terminalId: "P02",
-          airportCode: entry.flight.split("/")[1]?.trim() ?? "N/A",
-          fstandPosition: entry.timeStand.split("/")[1]?.trim() ?? "-",
-        },
-      }))
-    ),
-  ])
+  Object.entries(fixedSchedule)
+    .filter(([date]) => !FIXED_WILDCARD_KEYS.has(date))
+    .map(([date, entries]) => [date, dedupeBaggageSlots(mapFixedEntries(date, entries))])
 );
 
 /** 슬롯이 하나도 없는 날짜 키는 선택지·저장소에서 제거 */
@@ -58,12 +68,15 @@ const pruneEmptyDates = (input: Record<string, BaggageSlot[]>): Record<string, B
   return out;
 };
 
-/** 이번 API 스냅샷 기준으로만 합침 — API에서 빠진 날짜의 옛 데이터는 남기지 않음 */
+/** 이번 API 스냅샷 기준으로만 합침 — API에서 빠진 날짜의 옛 데이터는 남기지 않음. `*` 고정은 매 날짜에 합류 */
 const rebuildFromFixedAndGrouped = (grouped: Record<string, BaggageSlot[]>): Record<string, BaggageSlot[]> => {
-  const dates = new Set([...Object.keys(fixedSlotsByDate), ...Object.keys(grouped)]);
+  const dates = new Set<string>([...Object.keys(fixedSlotsByDate), ...Object.keys(grouped)]);
   const merged: Record<string, BaggageSlot[]> = {};
   for (const date of dates) {
-    merged[date] = mergeSlotsForDate(date, fixedSlotsByDate[date] ?? [], grouped[date] ?? []);
+    const datedFixed = fixedSlotsByDate[date] ?? [];
+    const wildcardForDate = fixedWildcardSlots.map((s) => ({ ...s, date }));
+    const combinedFixed = dedupeBaggageSlots([...wildcardForDate, ...datedFixed]);
+    merged[date] = mergeSlotsForDate(date, combinedFixed, grouped[date] ?? []);
   }
   return pruneEmptyDates(merged);
 };
@@ -73,8 +86,19 @@ const latestDateKey = (byDate: Record<string, BaggageSlot[]>): string => {
   return keys.length > 0 ? keys[keys.length - 1] : "";
 };
 
+/**
+ * `typeOfFlight` 빈 API 행은 같은 편·적재대의 ‘구분 있음’ 행과 중복으로 뜨는 경우가 많아 제외.
+ * 고정 스케줄(`fixedSchedule`)은 구분 필드가 비어 있으므로 항상 유지.
+ */
+const keepSlotWithFlightModeOrFixed = (slot: BaggageSlot): boolean => {
+  if ((slot.typeOfFlight ?? "").trim().length > 0) return true;
+  if (slot.note === "fixedSchedule") return true;
+  if (slot.status === "fixed") return true;
+  return false;
+};
+
 export function useBaggageData() {
-  const [slotsByDate, setSlotsByDate] = useState<Record<string, BaggageSlot[]>>(fixedSlotsByDate);
+  const [slotsByDate, setSlotsByDate] = useState<Record<string, BaggageSlot[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -179,7 +203,8 @@ export function useBaggageData() {
 
   const slots = useMemo(() => {
     if (!selectedDate) return [];
-    return dedupeBaggageSlots(slotsByDate[selectedDate] ?? []);
+    const list = dedupeBaggageSlots(slotsByDate[selectedDate] ?? []);
+    return list.filter(keepSlotWithFlightModeOrFixed);
   }, [slotsByDate, selectedDate]);
 
   const byHourCarousel = useMemo(() => {
