@@ -68,6 +68,53 @@ type TabKey = "all" | "terminal1" | "terminal2" | "unknown";
 type DisplayMode = "cards" | "table";
 type TableWidthMode = "scroll" | "fit";
 
+/** 격자 왼쪽 모서리 헤더: 좁은 열 안에 시간(왼)·캐로셀(오) 안내 — 하단 미러 헤더와 동일 */
+function CornerHeaderCell({ mode }: { mode: TableWidthMode }) {
+  if (mode === "scroll") {
+    return (
+      <div className="flex w-full min-w-0 items-center justify-between gap-1 px-0.5 text-[9px] font-semibold leading-tight text-slate-700 sm:text-[10px]">
+        <span className="shrink-0">시간</span>
+        <span className="shrink-0 text-slate-600">캐로셀</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex w-full min-w-0 flex-col items-center justify-center gap-0.5 py-0.5 text-[7px] font-semibold leading-tight text-slate-700 sm:text-[8px]">
+      <span className="shrink-0">시간</span>
+      <span className="shrink-0 font-medium text-slate-600">캐로셀</span>
+    </div>
+  );
+}
+
+/** 가로 보기 격자 헤더 — 본 테이블과 하단 스크롤 눈금에 동일하게 사용 */
+function GridHeaderRow({ mode }: { mode: TableWidthMode }) {
+  return (
+    <tr>
+      <th
+        className={`border border-slate-200 font-semibold text-slate-700 ${
+          mode === "scroll"
+            ? "sticky left-0 z-20 w-14 shrink-0 bg-slate-50 px-0 py-1.5 sm:w-16 sm:py-2"
+            : "w-9 bg-slate-50 px-0.5 py-1 sm:w-10 sm:py-1.5"
+        }`}
+      >
+        <CornerHeaderCell mode={mode} />
+      </th>
+      {FIXED_CAROUSELS.map((no) => (
+        <th
+          key={no}
+          className={`border border-slate-200 bg-yellow-100 text-center font-semibold text-slate-800 ${
+            mode === "fit"
+              ? "min-w-0 px-0.5 py-1 text-[9px] sm:text-[10px]"
+              : "w-24 shrink-0 px-0.5 py-1.5 sm:w-28 sm:px-1 sm:py-2 md:w-32 md:px-1.5"
+          }`}
+        >
+          {no}
+        </th>
+      ))}
+    </tr>
+  );
+}
+
 const DISPLAY_MODE_STORAGE_KEY = "baggage-display-mode-v1";
 const KE_CODESHARE_FILTER_STORAGE_KEY = "baggage-ke-codeshare-filter-v1";
 /** localStorage 실패 시 같은 탭 새로고침용 보조 저장 */
@@ -912,29 +959,7 @@ export default function BaggageCarouselBoard() {
                 }
               >
               <thead className="sticky top-0 z-10 bg-slate-50">
-                <tr>
-                  <th
-                    className={`border border-slate-200 text-center font-semibold text-slate-700 ${
-                      tableWidthMode === "scroll"
-                        ? "sticky left-0 z-20 w-14 shrink-0 bg-slate-50 px-1 py-1.5 sm:w-16 sm:px-1.5 sm:py-2"
-                        : "w-9 bg-slate-50 px-0.5 py-1 sm:w-10 sm:py-1.5"
-                    }`}
-                  >
-                    시간
-                  </th>
-                  {FIXED_CAROUSELS.map((no) => (
-                    <th
-                      key={no}
-                      className={`border border-slate-200 text-center font-semibold text-slate-700 ${
-                        tableWidthMode === "fit"
-                          ? "min-w-0 px-0.5 py-1 text-[9px] sm:text-[10px]"
-                          : "w-24 shrink-0 px-0.5 py-1.5 sm:w-28 sm:px-1 sm:py-2 md:w-32 md:px-1.5"
-                      }`}
-                    >
-                      {no}
-                    </th>
-                  ))}
-                </tr>
+                <GridHeaderRow mode={tableWidthMode} />
               </thead>
               <tbody>
                 {hours.map((hour) => (
@@ -1024,9 +1049,23 @@ export default function BaggageCarouselBoard() {
         <div
           ref={tableBelowMirrorRef}
           onScroll={onTableBelowMirrorScroll}
-          className="mx-auto flex w-full max-w-[1900px] min-h-10 [touch-action:pan-x_pan-y] items-end overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
+          className="mx-auto w-full max-w-[1900px] min-h-10 [touch-action:pan-x_pan-y] overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
         >
-          <div ref={tableBelowMirrorInnerRef} className="h-2 shrink-0" />
+          <div
+            ref={tableBelowMirrorInnerRef}
+            className="inline-block w-max shrink-0 align-top"
+            style={
+              isMobileGridViewport && displayMode === "table"
+                ? ({ zoom: mobileGridZoom } as CSSProperties)
+                : undefined
+            }
+          >
+            <table className="min-w-[680px] w-full table-fixed border-collapse text-[10px] text-slate-800 sm:min-w-[760px] sm:text-[11px] md:min-w-[820px] lg:min-w-[880px]">
+              <thead className="bg-slate-50">
+                <GridHeaderRow mode="scroll" />
+              </thead>
+            </table>
+          </div>
         </div>
       </div>
     ) : null}
