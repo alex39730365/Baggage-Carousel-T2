@@ -168,6 +168,35 @@ const persistKeCodeshareFilter = (on: boolean) => {
   }
 };
 
+/** 예전 키 `baggage-ke-yellow-highlight-v1`와 호환 — 설정 유지 */
+const KE_PINK_HIGHLIGHT_STORAGE_KEY = "baggage-ke-pink-highlight-v1";
+const KE_PINK_HIGHLIGHT_LEGACY_KEY = "baggage-ke-yellow-highlight-v1";
+
+const loadKePinkHighlight = (): boolean => {
+  if (typeof window === "undefined") return false;
+  const read = (key: string): boolean | null => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+  return read(KE_PINK_HIGHLIGHT_STORAGE_KEY) ?? read(KE_PINK_HIGHLIGHT_LEGACY_KEY) ?? false;
+};
+
+const persistKePinkHighlight = (on: boolean) => {
+  const v = on ? "1" : "0";
+  try {
+    localStorage.setItem(KE_PINK_HIGHLIGHT_STORAGE_KEY, v);
+    localStorage.removeItem(KE_PINK_HIGHLIGHT_LEGACY_KEY);
+  } catch {
+    // ignore
+  }
+};
+
 /**
  * IATA 2자 + 숫자 4자리는 코드셰어 표기로 보고 숨김.(7C·KE 등 — `7C`는 앞이 숫자라 [A-Z]{2}로는 잡히지 않음)
  * 예외: KE + 4자리 + 천의 자리 2 또는 8(KE 2000, KE8178 등)만 유지.
@@ -183,6 +212,26 @@ const shouldKeepSlotWithKeCodeshareFilter = (flight: string): boolean => {
   if (carrier === "KE" && (digits[0] === "2" || digits[0] === "8")) return true;
   return false;
 };
+
+/** `KE714 / NRT`, `KE 712` 등 본편 KE(앞부분이 KE+숫자) */
+const isMainlineKeFlight = (flight: string): boolean => {
+  const head =
+    flight
+      .trim()
+      .split(/\s*\/\s*/)[0]
+      ?.replace(/\s+/g, "")
+      .toUpperCase() ?? "";
+  return /^KE\d/.test(head);
+};
+
+const kePinkShellClass = "border-pink-400/90 bg-pink-50 ring-1 ring-pink-300/60";
+
+const slotShellClass = (starHighlighted: boolean, flight: string, kePinkOn: boolean) =>
+  starHighlighted
+    ? highlightShellClass(true)
+    : kePinkOn && isMainlineKeFlight(flight)
+      ? kePinkShellClass
+      : highlightShellClass(false);
 
 const TAB_ITEMS: { key: TabKey; label: string }[] = [
   { key: "all", label: "전체" },
@@ -339,6 +388,7 @@ export default function BaggageCarouselBoard() {
     typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches ? "fit" : "scroll"
   );
   const [hideKeCodeshareFlights, setHideKeCodeshareFlights] = useState(() => loadKeCodeshareFilter());
+  const [kePinkHighlight, setKePinkHighlight] = useState(() => loadKePinkHighlight());
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
@@ -677,6 +727,25 @@ export default function BaggageCarouselBoard() {
           ) : (
             <span className="text-[10px] text-slate-400 sm:text-[11px]">2글자+4자리 편 전부 표시</span>
           )}
+          <button
+            type="button"
+            aria-pressed={kePinkHighlight}
+            title="켜면 KE 본편 편명(KE714, KE712 등) 칸을 핑크색으로 표시합니다."
+            onClick={() =>
+              setKePinkHighlight((prev) => {
+                const next = !prev;
+                persistKePinkHighlight(next);
+                return next;
+              })
+            }
+            className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
+              kePinkHighlight
+                ? "border-pink-500 bg-pink-400 text-pink-950"
+                : "border-pink-200 bg-white text-pink-900 hover:bg-pink-50"
+            }`}
+          >
+            KE
+          </button>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="강조 표시">
@@ -755,7 +824,9 @@ export default function BaggageCarouselBoard() {
                       className={`min-h-[44px] w-full rounded-md border-0 px-2 py-2.5 text-left text-xs leading-snug transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-400 sm:min-h-0 sm:px-1 sm:py-1 ${
                         navigateFlashKey === row.dedupeKey
                           ? "bg-sky-200/90 text-slate-900"
-                          : "bg-transparent text-slate-700 hover:bg-slate-100/80"
+                          : kePinkHighlight && isMainlineKeFlight(row.flight)
+                            ? "bg-pink-50 text-slate-900 hover:bg-pink-100/90"
+                            : "bg-transparent text-slate-700 hover:bg-slate-100/80"
                       }`}
                       aria-label={`${row.flight} 목록·격자에서 해당 위치로 이동`}
                     >
@@ -799,8 +870,10 @@ export default function BaggageCarouselBoard() {
                           <li key={slotKey}>
                             <article
                               data-baggage-slot={slotKey}
-                              className={`relative flex items-center gap-1.5 rounded-lg border p-3 text-xs leading-relaxed text-slate-800 shadow-sm transition-[box-shadow,background-color] duration-200 ${highlightShellClass(
-                                highlighted
+                              className={`relative flex items-center gap-1.5 rounded-lg border p-3 text-xs leading-relaxed text-slate-800 shadow-sm transition-[box-shadow,background-color] duration-200 ${slotShellClass(
+                                highlighted,
+                                item.flight,
+                                kePinkHighlight
                               )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
                             >
                               <div className="min-w-0 flex-1">
@@ -1012,9 +1085,11 @@ export default function BaggageCarouselBoard() {
                                     }}
                                     className={`relative cursor-pointer touch-manipulation border leading-tight text-slate-800 outline-none transition-[box-shadow,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 ${
                                       compact
-                                        ? `rounded p-0.5 ${highlightShellClass(highlighted)}`
-                                        : `whitespace-pre-line rounded p-1.5 leading-4 ${highlightShellClass(
-                                            highlighted
+                                        ? `rounded p-0.5 ${slotShellClass(highlighted, item.flight, kePinkHighlight)}`
+                                        : `whitespace-pre-line rounded p-1.5 leading-4 ${slotShellClass(
+                                            highlighted,
+                                            item.flight,
+                                            kePinkHighlight
                                           )}`
                                     } ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
                                   >
