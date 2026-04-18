@@ -87,7 +87,6 @@ const LIST_VIEW_ALWAYS_SHOW_HOURS = new Set(["22:00", "23:00"]);
 /** 모바일 격자 보기 확대 (핀치·버튼). */
 const MOBILE_GRID_ZOOM_MIN = 0.55;
 const MOBILE_GRID_ZOOM_MAX = 1.85;
-const MOBILE_GRID_ZOOM_STEP = 0.12;
 const clampMobileGridZoom = (z: number) =>
   Math.min(MOBILE_GRID_ZOOM_MAX, Math.max(MOBILE_GRID_ZOOM_MIN, z));
 type TabKey = "all" | "terminal1" | "terminal2" | "unknown";
@@ -889,53 +888,9 @@ export default function BaggageCarouselBoard() {
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           {isMobileGridViewport ? (
-            <div
-              className="flex flex-col gap-1.5 border-b border-slate-100 bg-white px-3 py-2"
-              role="group"
-              aria-label="격자 확대·축소"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-medium text-slate-600">보기 크기</span>
-                <div className="flex min-h-[44px] flex-1 items-center justify-end gap-1.5">
-                  <button
-                    type="button"
-                    className="flex h-11 min-w-[44px] items-center justify-center rounded-md border border-slate-300 bg-white text-lg font-semibold text-slate-800 active:bg-slate-100 disabled:opacity-40"
-                    aria-label="격자 축소"
-                    disabled={mobileGridZoom <= MOBILE_GRID_ZOOM_MIN + 0.001}
-                    onClick={() =>
-                      setMobileGridZoom((z) => clampMobileGridZoom(z - MOBILE_GRID_ZOOM_STEP))
-                    }
-                  >
-                    −
-                  </button>
-                  <span className="min-w-[3.25rem] text-center text-xs font-semibold tabular-nums text-slate-800">
-                    {Math.round(mobileGridZoom * 100)}%
-                  </span>
-                  <button
-                    type="button"
-                    className="flex h-11 min-w-[44px] items-center justify-center rounded-md border border-slate-300 bg-white text-lg font-semibold text-slate-800 active:bg-slate-100 disabled:opacity-40"
-                    aria-label="격자 확대"
-                    disabled={mobileGridZoom >= MOBILE_GRID_ZOOM_MAX - 0.001}
-                    onClick={() =>
-                      setMobileGridZoom((z) => clampMobileGridZoom(z + MOBILE_GRID_ZOOM_STEP))
-                    }
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-[11px] font-medium text-indigo-900 active:bg-indigo-100"
-                    aria-label="보기 크기 초기화"
-                    onClick={() => setMobileGridZoom(1)}
-                  >
-                    100%
-                  </button>
-                </div>
-              </div>
-              <p className="text-[10px] leading-snug text-slate-400">
-                두 손가락으로 벌리거나 모으면 핀치로도 조절할 수 있어요.
-              </p>
-            </div>
+            <p className="border-b border-slate-100 bg-white px-3 py-2 text-[10px] leading-snug text-slate-400">
+              격자는 두 손가락으로 벌리거나 모아 확대·축소할 수 있어요.
+            </p>
           ) : null}
           <div
             className={
@@ -946,12 +901,12 @@ export default function BaggageCarouselBoard() {
           >
             <div
               ref={tablePinchWrapRef}
-              className="origin-top-left align-top w-full max-w-full min-w-0"
+              className="origin-top-left align-top w-full max-w-full min-w-0 [text-size-adjust:100%] [-webkit-text-size-adjust:100%]"
               style={
                 displayMode === "table" &&
                 isMobileGridViewport &&
                 Math.abs(mobileGridZoom - 1) >= 0.0001
-                  ? /** 가로만 `width: 100/z%`로 맞추면 세로는 z배로만 커져 칸이 세로로 늘어남 → zoom만 균등 확대 */
+                  ? /** `zoom`은 가로·세로 동일 비율. 가로만 width補正하면 세로만 커져 길쭉해 보임(Safari는 글자만 키우는 것처럼 보일 수 있어 text-size-adjust 고정). */
                     ({ zoom: mobileGridZoom } as CSSProperties)
                   : undefined
               }
