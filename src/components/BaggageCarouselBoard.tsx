@@ -951,11 +951,8 @@ export default function BaggageCarouselBoard() {
                 displayMode === "table" &&
                 isMobileGridViewport &&
                 Math.abs(mobileGridZoom - 1) >= 0.0001
-                  ? ({
-                      /** `zoom`만 쓰면 레이아웃 너비가 같이 커져 열·편명이 가로로 길어짐 → 폭을 1/z로 맞춤 */
-                      zoom: mobileGridZoom,
-                      width: `${100 / mobileGridZoom}%`,
-                    } as CSSProperties)
+                  ? /** 가로만 `width: 100/z%`로 맞추면 세로는 z배로만 커져 칸이 세로로 늘어남 → zoom만 균등 확대 */
+                    ({ zoom: mobileGridZoom } as CSSProperties)
                   : undefined
               }
             >
