@@ -55,6 +55,32 @@ const NAVIGATE_FLASH_MS = 2200;
 const navigateFlashShellClass = "z-[1] bg-sky-100/95 ring-2 ring-sky-400/90";
 
 const FIXED_CAROUSELS = Array.from({ length: 20 }, (_, i) => i + 1);
+/** 10번·11번 캐로셀 헤더를 누르면 토글 — 10번 열 오른쪽(10↔11 사이) 빨간 가이드 */
+const CAROUSEL_GUIDE_AFTER_NO = 10;
+const CAROUSEL_GUIDE_TOGGLE_NOS = new Set([10, 11]);
+const carouselGuideLineClass = "border-r-[3px] border-r-red-600";
+const CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY = "baggage-carousel-10-11-guide-v1";
+
+const loadCarouselGuideVisible = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = localStorage.getItem(CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY);
+    if (raw === "0") return false;
+    if (raw === "1") return true;
+  } catch {
+    // ignore
+  }
+  return true;
+};
+
+const persistCarouselGuideVisible = (visible: boolean) => {
+  try {
+    localStorage.setItem(CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
+  } catch {
+    // ignore
+  }
+};
+
 /** 목록(cards) 뷰에서 비어 있어도 구간은 반드시 보이게 할 시간대 */
 const LIST_VIEW_ALWAYS_SHOW_HOURS = new Set(["22:00", "23:00"]);
 
@@ -66,51 +92,61 @@ const clampMobileGridZoom = (z: number) =>
   Math.min(MOBILE_GRID_ZOOM_MAX, Math.max(MOBILE_GRID_ZOOM_MIN, z));
 type TabKey = "all" | "terminal1" | "terminal2" | "unknown";
 type DisplayMode = "cards" | "table";
-type TableWidthMode = "scroll" | "fit";
 
-/** 격자 왼쪽 모서리 헤더: 좁은 열 안에 시간(왼)·캐로셀(오) 안내 — 하단 미러 헤더와 동일 */
-function CornerHeaderCell({ mode }: { mode: TableWidthMode }) {
-  if (mode === "scroll") {
-    return (
-      <div className="flex w-full min-w-0 items-center justify-between gap-1 px-0.5 text-[9px] font-semibold leading-tight text-slate-700 sm:text-[10px]">
-        <span className="shrink-0">시간</span>
-        <span className="shrink-0 text-slate-600">캐로셀</span>
-      </div>
-    );
-  }
+/** 격자 왼쪽 모서리 헤더: 좁은 열 안에 시간·캐로셀 안내 */
+function CornerHeaderCell() {
   return (
-    <div className="flex w-full min-w-0 flex-col items-center justify-center gap-0.5 py-0.5 text-[7px] font-semibold leading-tight text-slate-700 sm:text-[8px]">
-      <span className="shrink-0">시간</span>
+    <div className="flex w-full min-w-0 flex-col items-center justify-center gap-0.5 py-0.5 text-[7px] font-semibold leading-tight sm:text-[8px]">
+      <span className="shrink-0 font-bold text-slate-950">시간</span>
       <span className="shrink-0 font-medium text-slate-600">캐로셀</span>
     </div>
   );
 }
 
-/** 가로 보기 격자 헤더 — 본 테이블과 하단 스크롤 눈금에 동일하게 사용 */
-function GridHeaderRow({ mode }: { mode: TableWidthMode }) {
+/** 격자 맨 위 캐로셀 행 */
+function GridHeaderRow({
+  guideVisible,
+  onToggleGuide,
+}: {
+  guideVisible: boolean;
+  onToggleGuide: () => void;
+}) {
   return (
     <tr>
-      <th
-        className={`border border-slate-200 font-semibold text-slate-700 ${
-          mode === "scroll"
-            ? "sticky left-0 z-20 w-14 shrink-0 bg-slate-50 px-0 py-1.5 sm:w-16 sm:py-2"
-            : "w-9 bg-slate-50 px-0.5 py-1 sm:w-10 sm:py-1.5"
-        }`}
-      >
-        <CornerHeaderCell mode={mode} />
+      <th className="w-9 min-w-0 border border-slate-200 bg-slate-50 px-0.5 py-1 font-semibold text-slate-700 sm:w-10 sm:py-1.5">
+        <CornerHeaderCell />
       </th>
-      {FIXED_CAROUSELS.map((no) => (
-        <th
-          key={no}
-          className={`border border-slate-200 bg-yellow-100 text-center font-semibold text-slate-800 ${
-            mode === "fit"
-              ? "min-w-0 px-0.5 py-1 text-[9px] sm:text-[10px]"
-              : "w-24 shrink-0 px-0.5 py-1.5 sm:w-28 sm:px-1 sm:py-2 md:w-32 md:px-1.5"
-          }`}
-        >
-          {no}
-        </th>
-      ))}
+      {FIXED_CAROUSELS.map((no) => {
+        const guideLine = guideVisible && no === CAROUSEL_GUIDE_AFTER_NO;
+        const togglesGuide = CAROUSEL_GUIDE_TOGGLE_NOS.has(no);
+        return (
+          <th
+            key={no}
+            scope="col"
+            className={`min-w-0 border border-slate-200 bg-yellow-100 px-0.5 py-1 text-center text-[9px] font-semibold text-slate-800 sm:text-[10px] ${
+              guideLine ? carouselGuideLineClass : ""
+            }`}
+          >
+            {togglesGuide ? (
+              <button
+                type="button"
+                className="w-full rounded-sm py-0.5 font-inherit text-inherit hover:bg-yellow-200/80 active:bg-yellow-300/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-red-600"
+                onClick={onToggleGuide}
+                aria-pressed={guideVisible}
+                title={
+                  guideVisible
+                    ? "10번·11번 사이 빨간 가이드선 끄기"
+                    : "10번·11번 사이 빨간 가이드선 켜기"
+                }
+              >
+                {no}
+              </button>
+            ) : (
+              no
+            )}
+          </th>
+        );
+      })}
     </tr>
   );
 }
@@ -324,32 +360,36 @@ const filterByTab = (slots: BaggageSlot[], tab: TabKey): BaggageSlot[] => {
   return slots.filter((slot) => getTerminalGroup(slot.raw) === "unknown");
 };
 
-/** 공공데이터 `typeOfFlight`: O 출발, I·D 도착 등 (표시용). 없으면 빈 문자열 → UI에서 생략 */
-const getFlightModeLabel = (typeOfFlight: string | undefined): string => {
-  const t = (typeOfFlight ?? "").trim().toUpperCase();
-  if (t === "O") return "출발";
-  if (t === "I" || t === "D") return "도착";
-  if (!t) return "";
-  return `구분 ${t}`;
-};
-
 /** 출발(O)만 제외 — I·D·구분 없음(고정 스케줄)은 표시. */
 const excludeOutboundFlights = (slots: BaggageSlot[]): BaggageSlot[] =>
   slots.filter((slot) => (slot.typeOfFlight ?? "").trim().toUpperCase() !== "O");
 
+const TimeStandLine = ({ time, stand, compact }: { time: string; stand: string; compact?: boolean }) => (
+  <p
+    className={
+      compact
+        ? "min-w-0 max-w-full break-words leading-tight text-slate-600 [overflow-wrap:anywhere]"
+        : "text-slate-600"
+    }
+  >
+    <span className={`font-bold tabular-nums text-slate-950 ${compact ? "text-[10px] sm:text-[11px]" : "text-xs sm:text-sm"}`}>
+      {time}
+    </span>
+    <span className={compact ? "text-slate-600" : ""}> / {stand}</span>
+  </p>
+);
+
 const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) => {
-  const modeLabel = getFlightModeLabel(item.typeOfFlight);
+  const timeStr = formatTime(item.estimatedTime);
+  const standStr = getStand(item.raw);
   return compact ? (
     <>
-      <p className="break-words font-semibold leading-tight text-slate-900">
+      <p className="min-w-0 max-w-full break-words font-semibold leading-tight text-slate-900 [overflow-wrap:anywhere]">
         {formatFlightAirportLine(item)}
       </p>
-      {!!modeLabel && (
-        <p className="leading-tight text-[9px] text-blue-700 sm:text-[10px]">{modeLabel}</p>
-      )}
-      <p className="break-words leading-tight text-slate-700">{`${formatTime(item.estimatedTime)} / ${getStand(item.raw)}`}</p>
+      <TimeStandLine time={timeStr} stand={standStr} compact />
       {!!item.pieces && (
-        <p className="break-words leading-tight text-slate-600">
+        <p className="min-w-0 max-w-full break-words leading-tight text-slate-600">
           {item.pieces.toLowerCase().includes("pc") ? item.pieces : `${item.pieces} pc`}
         </p>
       )}
@@ -359,10 +399,7 @@ const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean })
       <p className="font-semibold text-slate-900">
         {formatFlightAirportLine(item)}
       </p>
-      {!!modeLabel && (
-        <p className="text-[10px] text-blue-700 sm:text-[11px]">{modeLabel}</p>
-      )}
-      <p className="text-slate-700">{`${formatTime(item.estimatedTime)} / ${getStand(item.raw)}`}</p>
+      <TimeStandLine time={timeStr} stand={standStr} />
       {!!item.pieces && (
         <p className="text-slate-600">
           {item.pieces.toLowerCase().includes("pc") ? item.pieces : `${item.pieces} pc`}
@@ -383,20 +420,11 @@ export default function BaggageCarouselBoard() {
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) return "cards";
     return "table";
   });
-  /** 모바일(폭 640px 미만)은 기본 `fit` — 가로 스크롤만 쓰면 세로 스크롤이 불편한 경우가 많음 */
-  const [tableWidthMode, setTableWidthMode] = useState<TableWidthMode>(() =>
-    typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches ? "fit" : "scroll"
-  );
   const [hideKeCodeshareFlights, setHideKeCodeshareFlights] = useState(() => loadKeCodeshareFilter());
   const [kePinkHighlight, setKePinkHighlight] = useState(() => loadKePinkHighlight());
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
-  const tableHScrollRef = useRef<HTMLDivElement>(null);
-  /** 격자와 동기: 모니터 화면 맨 아래 고정 가로 스크롤 미러 */
-  const tableBelowMirrorRef = useRef<HTMLDivElement>(null);
-  const tableBelowMirrorInnerRef = useRef<HTMLDivElement>(null);
-  const [showTableBelowHScroll, setShowTableBelowHScroll] = useState(false);
   const [isMobileGridViewport, setIsMobileGridViewport] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 639px)").matches : false
   );
@@ -404,8 +432,17 @@ export default function BaggageCarouselBoard() {
   const mobileGridZoomRef = useRef(1);
   const tablePinchWrapRef = useRef<HTMLDivElement>(null);
   const pinchGestureRef = useRef<{ dist0: number; zoom0: number } | null>(null);
+  const [carouselGuideVisible, setCarouselGuideVisible] = useState(() => loadCarouselGuideVisible());
 
   mobileGridZoomRef.current = mobileGridZoom;
+
+  const toggleCarouselGuide = useCallback(() => {
+    setCarouselGuideVisible((prev) => {
+      const next = !prev;
+      persistCarouselGuideVisible(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 639px)");
@@ -416,8 +453,8 @@ export default function BaggageCarouselBoard() {
   }, []);
 
   useEffect(() => {
-    if (!isMobileGridViewport || displayMode !== "table") setMobileGridZoom(1);
-  }, [isMobileGridViewport, displayMode]);
+    if (displayMode !== "table" || !isMobileGridViewport) setMobileGridZoom(1);
+  }, [displayMode, isMobileGridViewport]);
 
   useEffect(() => {
     return () => {
@@ -482,69 +519,6 @@ export default function BaggageCarouselBoard() {
     return collapseDuplicateFlightsPreferClassified(list);
   }, [slots, activeTab, hideKeCodeshareFlights]);
 
-  const measureAndSyncTableBelowMirror = useCallback(() => {
-    if (displayMode !== "table" || tableWidthMode !== "scroll") {
-      setShowTableBelowHScroll(false);
-      return;
-    }
-    const main = tableHScrollRef.current;
-    if (!main) {
-      setShowTableBelowHScroll(false);
-      return;
-    }
-    const inner = tablePinchWrapRef.current;
-    const scrollW = Math.max(
-      main.scrollWidth,
-      inner ? Math.max(inner.scrollWidth, inner.offsetWidth) : 0
-    );
-    const mirrorInner = tableBelowMirrorInnerRef.current;
-    if (mirrorInner) mirrorInner.style.width = `${scrollW}px`;
-    const maxScroll = Math.max(0, scrollW - main.clientWidth);
-    const show = maxScroll > 1;
-    setShowTableBelowHScroll(show);
-    const mirror = tableBelowMirrorRef.current;
-    if (show && mirror && Math.abs(mirror.scrollLeft - main.scrollLeft) > 0.5) {
-      mirror.scrollLeft = main.scrollLeft;
-    }
-  }, [displayMode, tableWidthMode]);
-
-  const onTableBelowMirrorScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const main = tableHScrollRef.current;
-    if (!main) return;
-    main.scrollLeft = e.currentTarget.scrollLeft;
-  }, []);
-
-  useEffect(() => {
-    if (displayMode !== "table" || tableWidthMode !== "scroll") {
-      setShowTableBelowHScroll(false);
-      return;
-    }
-    const main = tableHScrollRef.current;
-    const inner = tablePinchWrapRef.current;
-    if (!main) return;
-
-    const run = () => requestAnimationFrame(() => measureAndSyncTableBelowMirror());
-    run();
-
-    const onMainScroll = () => {
-      const mirror = tableBelowMirrorRef.current;
-      if (!mirror) return;
-      if (Math.abs(mirror.scrollLeft - main.scrollLeft) > 0.5) mirror.scrollLeft = main.scrollLeft;
-    };
-    main.addEventListener("scroll", onMainScroll, { passive: true });
-
-    const ro = new ResizeObserver(run);
-    ro.observe(main);
-    if (inner) ro.observe(inner);
-
-    window.addEventListener("resize", run);
-    return () => {
-      main.removeEventListener("scroll", onMainScroll);
-      window.removeEventListener("resize", run);
-      ro.disconnect();
-    };
-  }, [displayMode, tableWidthMode, measureAndSyncTableBelowMirror, visibleSlots, mobileGridZoom]);
-
   useEffect(() => {
     if (!isMobileGridViewport || displayMode !== "table") return;
     const el = tablePinchWrapRef.current;
@@ -589,7 +563,7 @@ export default function BaggageCarouselBoard() {
       el.removeEventListener("touchend", onEnd);
       el.removeEventListener("touchcancel", onEnd);
     };
-  }, [isMobileGridViewport, displayMode]);
+  }, [displayMode, isMobileGridViewport]);
 
   const byHourCarousel = useMemo(() => {
     const map = new Map<string, BaggageSlot[]>();
@@ -614,7 +588,6 @@ export default function BaggageCarouselBoard() {
         dedupeKey: getSlotDedupeKey(slot),
         sortMin: getSortableMinuteOfDay(slot),
         flight: slot.flight,
-        typeOfFlight: slot.typeOfFlight,
         hour: slot.hour,
         time: formatTime(slot.estimatedTime),
         carousel: slot.carousel,
@@ -655,13 +628,19 @@ export default function BaggageCarouselBoard() {
     return out;
   }, [visibleSlots]);
 
-  /** 격자: 마지막 행(23시)·모바일 줌이 홈 인디케이터·하단 고정 가로 스크롤에 가려지지 않게 스크롤 끝 여유 */
+  /** 격자: 마지막 행·모바일 줌이 홈 인디케이터 등에 가려지지 않게 스크롤 끝 여유 */
   const tableBottomScrollSpacerClass =
-    displayMode === "table" && (isMobileGridViewport || showTableBelowHScroll)
-      ? showTableBelowHScroll
-        ? "pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))]"
-        : "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]"
+    displayMode === "table" && isMobileGridViewport
+      ? "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]"
       : "";
+
+  /**
+   * 래퍼에 항상 `overflow-x-auto`만 두면 브라우저가 세로 스크롤 기준을 바꿔
+   * `thead`의 `sticky top-0`이 페이지가 아니라 래퍼 기준으로 깨짐 → 노란 캐로셀 줄이 안 따라옴.
+   * 모바일에서 확대로 가로가 넘칠 때만 가로 스크롤을 켜고 `overflow-y-clip`으로 세로 sticky는 유지.
+   */
+  const gridNeedsHorizontalScroll =
+    displayMode === "table" && isMobileGridViewport && mobileGridZoom > 1.001;
 
   return (
     <>
@@ -814,9 +793,7 @@ export default function BaggageCarouselBoard() {
                 <p>검색 결과가 없습니다.</p>
               ) : (
                 <div className="space-y-1">
-                  {searchRows.map((row) => {
-                    const mode = getFlightModeLabel(row.typeOfFlight);
-                    return (
+                  {searchRows.map((row) => (
                     <button
                       key={row.dedupeKey}
                       type="button"
@@ -830,11 +807,11 @@ export default function BaggageCarouselBoard() {
                       }`}
                       aria-label={`${row.flight} 목록·격자에서 해당 위치로 이동`}
                     >
-                      {row.flight}
-                      {mode ? ` - ${mode}` : ""} - 시간 {row.time} - 적재대 {row.carousel}번
+                      {row.flight} — 시간{" "}
+                      <span className="font-bold tabular-nums text-slate-950">{row.time}</span> — 적재대{" "}
+                      {row.carousel}번
                     </button>
-                    );
-                  })}
+                  ))}
                 </div>
               )}
             </div>
@@ -856,7 +833,7 @@ export default function BaggageCarouselBoard() {
                 if (!items?.length && !LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) return null;
                 return (
                   <section key={hour}>
-                    <h2 className="mb-2 border-b border-slate-200 pb-1 text-sm font-semibold text-slate-800">
+                    <h2 className="mb-2 border-b border-slate-200 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 sm:text-lg">
                       {hour}
                     </h2>
                     {!items?.length ? (
@@ -911,54 +888,9 @@ export default function BaggageCarouselBoard() {
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-2 border-b border-slate-100 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-            <div
-              className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5"
-              role="group"
-              aria-label="격자 너비"
-            >
-              <span className="shrink-0 text-[11px] font-medium text-slate-600 sm:text-xs">격자 너비</span>
-              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setTableWidthMode("fit")}
-                  title="20개 적재대 열을 화면 너비에 맞춥니다. 글자·칸이 작아질 수 있습니다."
-                  className={`min-w-0 rounded-md border px-2 py-2.5 text-center text-[11px] font-medium leading-snug sm:px-2 sm:py-1 sm:text-xs ${
-                    tableWidthMode === "fit"
-                      ? "border-amber-700 bg-amber-700 text-white"
-                      : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
-                  }`}
-                >
-                  전체 맞춤
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTableWidthMode("scroll")}
-                  title="열 너비를 고정하고 가로로 밀어 봅니다. 왼쪽 시간 열은 고정됩니다."
-                  className={`min-w-0 rounded-md border px-2 py-2.5 text-center text-[11px] font-medium leading-snug sm:px-2 sm:py-1 sm:text-xs ${
-                    tableWidthMode === "scroll"
-                      ? "border-amber-700 bg-amber-700 text-white"
-                      : "border-amber-200 bg-white text-amber-900 hover:bg-amber-50"
-                  }`}
-                >
-                  가로 보기
-                </button>
-              </div>
-            </div>
-            <p className="hidden text-[10px] text-slate-500 sm:block sm:text-[11px]">
-              {tableWidthMode === "fit"
-                ? "전체 맞춤: 20열을 한 화면에 넣습니다. 글자·칸이 작아질 수 있습니다."
-                : "가로 보기: 화면 맨 아래 고정 가로 스크롤바로 좌우 이동합니다. 시간 열은 고정입니다."}
-            </p>
-            <p className="text-[10px] leading-snug text-slate-500 sm:hidden">
-              {tableWidthMode === "fit"
-                ? "20열을 한 화면에. 글자·칸이 작아질 수 있어요."
-                : "가로로 밀어 넓게 봐요. 화면 밑 고정 스크롤로 좌우 이동. 왼쪽 시간 열만 고정돼요."}
-            </p>
-          </div>
           {isMobileGridViewport ? (
             <div
-              className="flex flex-col gap-1.5 border-b border-slate-100 bg-white px-3 py-2 sm:hidden"
+              className="flex flex-col gap-1.5 border-b border-slate-100 bg-white px-3 py-2"
               role="group"
               aria-label="격자 확대·축소"
             >
@@ -1006,58 +938,50 @@ export default function BaggageCarouselBoard() {
             </div>
           ) : null}
           <div
-            ref={tableHScrollRef}
             className={
-              tableWidthMode === "fit"
-                ? "w-full"
-                : "[touch-action:pan-x_pan-y] overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              gridNeedsHorizontalScroll
+                ? "w-full min-w-0 overflow-x-auto overflow-y-clip [-webkit-overflow-scrolling:touch]"
+                : "w-full min-w-0"
             }
           >
             <div
               ref={tablePinchWrapRef}
-              className={`origin-top-left align-top ${
-                tableWidthMode === "scroll" ? "inline-block w-max max-w-none" : ""
-              }`}
+              className="origin-top-left align-top w-full max-w-full min-w-0"
               style={
-                isMobileGridViewport && displayMode === "table"
-                  ? ({ zoom: mobileGridZoom } as CSSProperties)
+                displayMode === "table" &&
+                isMobileGridViewport &&
+                Math.abs(mobileGridZoom - 1) >= 0.0001
+                  ? ({
+                      /** `zoom`만 쓰면 레이아웃 너비가 같이 커져 열·편명이 가로로 길어짐 → 폭을 1/z로 맞춤 */
+                      zoom: mobileGridZoom,
+                      width: `${100 / mobileGridZoom}%`,
+                    } as CSSProperties)
                   : undefined
               }
             >
-              <table
-                className={
-                  tableWidthMode === "fit"
-                    ? "w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]"
-                    : "min-w-[680px] table-fixed border-collapse text-[10px] sm:min-w-[760px] sm:text-[11px] md:min-w-[820px] lg:min-w-[880px]"
-                }
-              >
-              <thead className="sticky top-0 z-10 bg-slate-50">
-                <GridHeaderRow mode={tableWidthMode} />
+              <table className="w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]">
+              <thead className="sticky top-0 z-20 bg-slate-50 shadow-[0_1px_0_rgba(0,0,0,0.06)] ring-1 ring-slate-200/60">
+                <GridHeaderRow guideVisible={carouselGuideVisible} onToggleGuide={toggleCarouselGuide} />
               </thead>
               <tbody>
                 {hours.map((hour) => (
                   <tr key={hour}>
-                    <td
-                      className={`border border-slate-200 bg-slate-50 text-center font-medium text-slate-700 ${
-                        tableWidthMode === "scroll"
-                          ? "sticky left-0 z-10 border-r border-slate-200 bg-slate-50 px-2 py-2"
-                          : "w-9 px-0.5 py-1 text-[9px] sm:w-10 sm:text-[10px]"
-                      }`}
-                    >
+                    <td className="w-9 min-w-0 border border-slate-200 bg-slate-50 px-0.5 py-1 text-center text-[9px] font-bold tabular-nums tracking-tight text-slate-950 sm:w-10 sm:text-[10px]">
                       {hour}
                     </td>
                     {FIXED_CAROUSELS.map((carousel) => {
                       const key = `${hour}-${carousel}`;
                       const items = byHourCarousel.get(key) ?? [];
-                      const compact = tableWidthMode === "fit";
                       return (
                         <td
                           key={key}
-                          className={`border border-slate-200 align-top ${
-                            compact ? "min-h-[52px] p-0.5 sm:min-h-[56px]" : "h-14 sm:h-16"
+                          className={`min-h-[52px] min-w-0 border border-slate-200 align-top p-0.5 sm:min-h-[56px] ${
+                            carouselGuideVisible && carousel === CAROUSEL_GUIDE_AFTER_NO
+                              ? carouselGuideLineClass
+                              : ""
                           }`}
                         >
-                          <div className={compact ? "space-y-0.5" : "space-y-1 p-1.5 sm:p-2"}>
+                          <div className="min-w-0 max-w-full space-y-0.5">
                             {items.length === 0 ? (
                               <span className="text-[11px] text-slate-300" />
                             ) : (
@@ -1083,17 +1007,13 @@ export default function BaggageCarouselBoard() {
                                         toggleHighlightKey(slotKey);
                                       }
                                     }}
-                                    className={`relative cursor-pointer touch-manipulation border leading-tight text-slate-800 outline-none transition-[box-shadow,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 ${
-                                      compact
-                                        ? `rounded p-0.5 ${slotShellClass(highlighted, item.flight, kePinkHighlight)}`
-                                        : `whitespace-pre-line rounded p-1.5 leading-4 ${slotShellClass(
-                                            highlighted,
-                                            item.flight,
-                                            kePinkHighlight
-                                          )}`
-                                    } ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
+                                    className={`relative min-w-0 max-w-full cursor-pointer touch-manipulation rounded border p-0.5 leading-tight text-slate-800 outline-none transition-[box-shadow,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 ${slotShellClass(
+                                      highlighted,
+                                      item.flight,
+                                      kePinkHighlight
+                                    )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
                                   >
-                                    <SlotDetail item={item} compact={compact} />
+                                    <SlotDetail item={item} compact />
                                   </article>
                                 );
                               })
@@ -1111,39 +1031,6 @@ export default function BaggageCarouselBoard() {
         </div>
       )}
     </section>
-    {displayMode === "table" && tableWidthMode === "scroll" ? (
-      <div
-        className={
-          showTableBelowHScroll
-            ? "pointer-events-auto fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 px-2 py-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom,0px))] shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur-sm"
-            : "pointer-events-none fixed bottom-0 left-0 right-0 z-50 h-0 overflow-hidden border-0 p-0 opacity-0 shadow-none"
-        }
-        role="presentation"
-        aria-hidden
-      >
-        <div
-          ref={tableBelowMirrorRef}
-          onScroll={onTableBelowMirrorScroll}
-          className="mx-auto w-full max-w-[1900px] min-h-10 [touch-action:pan-x_pan-y] overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [scrollbar-width:thin] sm:min-h-2 [&::-webkit-scrollbar]:h-3.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-200/90"
-        >
-          <div
-            ref={tableBelowMirrorInnerRef}
-            className="inline-block w-max shrink-0 align-top"
-            style={
-              isMobileGridViewport && displayMode === "table"
-                ? ({ zoom: mobileGridZoom } as CSSProperties)
-                : undefined
-            }
-          >
-            <table className="min-w-[680px] w-full table-fixed border-collapse text-[10px] text-slate-800 sm:min-w-[760px] sm:text-[11px] md:min-w-[820px] lg:min-w-[880px]">
-              <thead className="bg-slate-50">
-                <GridHeaderRow mode="scroll" />
-              </thead>
-            </table>
-          </div>
-        </div>
-      </div>
-    ) : null}
     </>
   );
 }

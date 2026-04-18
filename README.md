@@ -40,3 +40,5 @@
 
 - 필드명이 환경마다 다를 수 있어 `flightId`, `estimatedDatetime`, `lateralNo`, `lateral1Status` 등 복수 키를 순차 탐색하도록 작성됨
 - 로컬 개발 시 Vite 프록시를 사용하고, 배포 시에는 `api/baggage-arrivals.ts` 서버리스 함수가 공공 API를 중계합니다
+
+취업·포트폴리오용으로 정리한 설명 문서는 `docs/취업용-포트폴리오-문서.md`를 참고하세요.
