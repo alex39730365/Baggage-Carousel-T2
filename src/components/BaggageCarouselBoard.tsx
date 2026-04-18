@@ -558,9 +558,17 @@ export default function BaggageCarouselBoard() {
     return out;
   }, [visibleSlots]);
 
+  /** 격자: 마지막 행(23시)·모바일 줌이 홈 인디케이터·하단 고정 가로 스크롤에 가려지지 않게 스크롤 끝 여유 */
+  const tableBottomScrollSpacerClass =
+    displayMode === "table" && (isMobileGridViewport || showTableBelowHScroll)
+      ? showTableBelowHScroll
+        ? "pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))]"
+        : "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]"
+      : "";
+
   return (
     <>
-    <section className="space-y-3 sm:space-y-4">
+    <section className={`space-y-3 sm:space-y-4 ${tableBottomScrollSpacerClass}`}>
       <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
         <h1 className="text-lg font-bold text-slate-900 sm:text-xl">Baggage Carousel 현황</h1>
         <p className="mt-1 text-xs text-slate-600 sm:text-sm">API 자동 갱신: 1분 간격</p>
