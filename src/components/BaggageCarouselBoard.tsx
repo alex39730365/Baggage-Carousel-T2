@@ -61,6 +61,9 @@ type DisplayMode = "cards" | "table";
 type TableWidthMode = "scroll" | "fit";
 
 const DISPLAY_MODE_STORAGE_KEY = "baggage-display-mode-v1";
+const KE_CODESHARE_FILTER_STORAGE_KEY = "baggage-ke-codeshare-filter-v1";
+/** localStorage 실패 시 같은 탭 새로고침용 보조 저장 */
+const KE_CODESHARE_FILTER_SESSION_KEY = "baggage-ke-codeshare-filter-session-v1";
 
 const loadDisplayMode = (): DisplayMode | null => {
   if (typeof window === "undefined") return null;
@@ -79,6 +82,51 @@ const persistDisplayMode = (mode: DisplayMode) => {
   } catch {
     // ignore
   }
+};
+
+const loadKeCodeshareFilter = (): boolean => {
+  if (typeof window === "undefined") return false;
+  const read = (storage: Storage, key: string): boolean | null => {
+    try {
+      const raw = storage.getItem(key);
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+  return read(localStorage, KE_CODESHARE_FILTER_STORAGE_KEY) ?? read(sessionStorage, KE_CODESHARE_FILTER_SESSION_KEY) ?? false;
+};
+
+const persistKeCodeshareFilter = (on: boolean) => {
+  const v = on ? "1" : "0";
+  try {
+    localStorage.setItem(KE_CODESHARE_FILTER_STORAGE_KEY, v);
+  } catch {
+    // ignore
+  }
+  try {
+    sessionStorage.setItem(KE_CODESHARE_FILTER_SESSION_KEY, v);
+  } catch {
+    // ignore
+  }
+};
+
+/**
+ * IATA 2글자 + 숫자 4자리(예: AF5367, DL1234, KE7123)는 코드셰어로 보고 숨김.
+ * 예외: KE + 4자리 + 천의 자리 2 또는 8(KE 2000, KE8178 등)만 유지.
+ * 3자리·5자리 이상·편명 형식이 다른 경우는 그대로 둔다.
+ */
+const shouldKeepSlotWithKeCodeshareFilter = (flight: string): boolean => {
+  const compact = flight.trim().toUpperCase().replace(/\s+/g, "");
+  const m = compact.match(/^([A-Z]{2})(\d+)$/);
+  if (!m) return true;
+  const carrier = m[1];
+  const digits = m[2];
+  if (digits.length !== 4) return true;
+  if (carrier === "KE" && (digits[0] === "2" || digits[0] === "8")) return true;
+  return false;
 };
 
 const TAB_ITEMS: { key: TabKey; label: string }[] = [
@@ -203,6 +251,7 @@ export default function BaggageCarouselBoard() {
   const [tableWidthMode, setTableWidthMode] = useState<TableWidthMode>(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches ? "fit" : "scroll"
   );
+  const [hideKeCodeshareFlights, setHideKeCodeshareFlights] = useState(() => loadKeCodeshareFilter());
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
@@ -288,10 +337,13 @@ export default function BaggageCarouselBoard() {
     [scrollToSlotKey]
   );
 
-  const visibleSlots = useMemo(
-    () => excludeOutboundFlights(filterByTab(slots, activeTab)),
-    [slots, activeTab]
-  );
+  const visibleSlots = useMemo(() => {
+    let list = excludeOutboundFlights(filterByTab(slots, activeTab));
+    if (hideKeCodeshareFlights) {
+      list = list.filter((slot) => shouldKeepSlotWithKeCodeshareFilter(slot.flight));
+    }
+    return list;
+  }, [slots, activeTab, hideKeCodeshareFlights]);
 
   const measureAndSyncTableBelowMirror = useCallback(() => {
     if (displayMode !== "table" || tableWidthMode !== "scroll") {
@@ -500,6 +552,36 @@ export default function BaggageCarouselBoard() {
           >
             격자
           </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="코드셰어 편명 정리">
+          <span className="text-[11px] font-medium text-slate-600 sm:text-xs">편명</span>
+          <button
+            type="button"
+            aria-pressed={hideKeCodeshareFlights}
+            title="켜면 XX1234 형(예: AF5367)은 숨기고, KE 2xxx·KE 8xxx만 예외로 남깁니다."
+            onClick={() =>
+              setHideKeCodeshareFlights((prev) => {
+                const next = !prev;
+                persistKeCodeshareFilter(next);
+                return next;
+              })
+            }
+            className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
+              hideKeCodeshareFlights
+                ? "border-violet-700 bg-violet-700 text-white"
+                : "border-violet-200 bg-white text-violet-900 hover:bg-violet-50"
+            }`}
+          >
+            코드셰어
+          </button>
+          {hideKeCodeshareFlights ? (
+            <span className="text-[10px] text-slate-500 sm:text-[11px]">
+              XX1234 숨김 · KE 2xxx·8xxx만 예외 표시
+            </span>
+          ) : (
+            <span className="text-[10px] text-slate-400 sm:text-[11px]">2글자+4자리 편 전부 표시</span>
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="강조 표시">
