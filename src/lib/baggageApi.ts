@@ -173,10 +173,10 @@ const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
 
   /** 표시·정렬용 (예정 우선) */
   const estimatedOnly = pickString(item, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]);
-  /** 격자 날짜·시간 행: 스케줄 우선 — 예정이 자정 넘어 다음날 00시로만 바뀐 경우에도 당일 23시대 행에 남김 */
+  /** 격자 날짜·시간 행: 화면에 보이는 표시 시각(displayTime) 기준으로 맞춘다. */
   const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime", "std"]);
   const displayTime = estimatedOnly.trim() || scheduleTime.trim();
-  const bucketTime = scheduleTime.trim() || estimatedOnly.trim() || displayTime;
+  const bucketTime = displayTime || scheduleTime.trim() || estimatedOnly.trim();
   const { dateKey, hour } = bucketDateHour(bucketTime);
   const status = pickString(item, [
     "lateral1Status",
@@ -226,12 +226,12 @@ export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): 
   return a.flight.localeCompare(b.flight);
 }
 
-/** 스케줄(있으면) → 예정 순으로 격자 `date`·`hour` 행 맞춤 — 병합·캐시 후에도 `normalizeItem`과 동일 규칙 */
+/** 격자 `date`·`hour` 행은 표시 시각 우선으로 맞춤 — 병합·캐시 후에도 `normalizeItem`과 동일 규칙 */
 export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
   const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime", "std"]).trim();
   const estimatedOnly = pickString(slot.raw, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]).trim();
   const displayTime = slot.estimatedTime.trim() || estimatedOnly || scheduleTime;
-  const bucketTime = scheduleTime || estimatedOnly || displayTime;
+  const bucketTime = displayTime || estimatedOnly || scheduleTime;
   if (!bucketTime.trim()) return slot;
   const w = parseSeoulWallClock(bucketTime);
   if (!w) return slot;
