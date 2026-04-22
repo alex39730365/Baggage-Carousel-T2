@@ -175,18 +175,8 @@ const persistDisplayMode = (mode: DisplayMode) => {
 };
 
 const loadKeCodeshareFilter = (): boolean => {
-  if (typeof window === "undefined") return false;
-  const read = (storage: Storage, key: string): boolean | null => {
-    try {
-      const raw = storage.getItem(key);
-      if (raw === "1") return true;
-      if (raw === "0") return false;
-    } catch {
-      // ignore
-    }
-    return null;
-  };
-  return read(localStorage, KE_CODESHARE_FILTER_STORAGE_KEY) ?? read(sessionStorage, KE_CODESHARE_FILTER_SESSION_KEY) ?? false;
+  // 요청사항: 웹사이트 시작 시 코드셰어 필터를 항상 켠 상태로 시작.
+  return true;
 };
 
 const persistKeCodeshareFilter = (on: boolean) => {
