@@ -36,8 +36,8 @@ const persistHighlights = (keys: Set<string>) => {
 /** 목록·격자 카드 공통: 테두리+배경 (비강조는 기존과 비슷한 톤). */
 const highlightShellClass = (on: boolean) =>
   on
-    ? "border-amber-400/90 bg-amber-50 ring-1 ring-amber-300/60"
-    : "border-slate-200/90 bg-slate-50";
+    ? "border-amber-300 bg-amber-50 ring-1 ring-amber-200"
+    : "border-slate-200 bg-white";
 
 /** 모바일 최소 터치 영역(~44px), sm 이상은 조금 줄여 격자 밀도 유지 */
 const highlightMarkHitClass = "min-h-[44px] min-w-[44px] sm:min-h-9 sm:min-w-9";
@@ -52,7 +52,7 @@ const highlightMarkButtonClassList = `${highlightMarkButtonBaseClass} text-[15px
 
 /** 편명 검색에서 줄·해당 슬롯을 잠깐 강조할 때 (약 2.2초). */
 const NAVIGATE_FLASH_MS = 2200;
-const navigateFlashShellClass = "z-[1] bg-sky-100/95 ring-2 ring-sky-400/90";
+const navigateFlashShellClass = "z-[1] bg-sky-50 ring-2 ring-sky-300";
 
 const FIXED_CAROUSELS = Array.from({ length: 20 }, (_, i) => i + 1);
 /** 10번·11번 캐로셀 헤더를 누르면 토글 — 10번 열 오른쪽(10↔11 사이) 빨간 가이드 */
@@ -249,7 +249,7 @@ const isMainlineKeFlight = (flight: string): boolean => {
   return /^KE\d/.test(head);
 };
 
-const kePinkShellClass = "border-pink-400/90 bg-pink-50 ring-1 ring-pink-300/60";
+const kePinkShellClass = "border-rose-300 bg-rose-50 ring-1 ring-rose-200";
 
 const slotShellClass = (starHighlighted: boolean, flight: string, kePinkOn: boolean) =>
   starHighlighted
@@ -368,12 +368,21 @@ const TimeStandLine = ({ time, stand, compact }: { time: string; stand: string; 
   </p>
 );
 
+const EmptyState = ({ message }: { message: string }) => (
+  <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center">
+    <div className="mx-auto mb-2 flex h-8 w-8 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-500">
+      i
+    </div>
+    <p className="text-sm text-slate-600">{message}</p>
+  </div>
+);
+
 const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) => {
   const timeStr = formatTime(item.estimatedTime);
   const standStr = getStand(item.raw);
   return compact ? (
     <>
-      <p className="min-w-0 max-w-full break-words font-semibold leading-tight text-slate-900 [overflow-wrap:anywhere]">
+      <p className="min-w-0 max-w-full break-words text-[11px] font-bold leading-tight text-slate-950 [overflow-wrap:anywhere]">
         {formatFlightAirportLine(item)}
       </p>
       <TimeStandLine time={timeStr} stand={standStr} compact />
@@ -385,7 +394,7 @@ const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean })
     </>
   ) : (
     <>
-      <p className="font-semibold text-slate-900">
+      <p className="text-sm font-bold text-slate-950">
         {formatFlightAirportLine(item)}
       </p>
       <TimeStandLine time={timeStr} stand={standStr} />
@@ -634,12 +643,20 @@ export default function BaggageCarouselBoard() {
   return (
     <>
     <section className={`space-y-3 sm:space-y-4 ${tableBottomScrollSpacerClass}`}>
-      <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
-        <h1 className="text-lg font-bold text-slate-900 sm:text-xl">Baggage Carousel 현황</h1>
-        <p className="mt-1 text-xs text-slate-600 sm:text-sm">API 자동 갱신: 1분 간격</p>
-        <p className="mt-1 text-[11px] text-slate-500 sm:text-xs">
-          마지막 갱신: {lastUpdated ? lastUpdated.toLocaleString("ko-KR", { hour12: false }) : "-"}
-        </p>
+      <header className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900 sm:text-xl">수하물 캐러셀 현황판</h1>
+            <p className="mt-1 text-xs text-slate-600 sm:text-sm">API 자동 갱신: 1분 간격</p>
+          </div>
+          <div className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-800 sm:text-xs">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            <span className="font-semibold">LIVE</span>
+            <span className="text-emerald-900/80">
+              {lastUpdated ? lastUpdated.toLocaleString("ko-KR", { hour12: false }) : "-"}
+            </span>
+          </div>
+        </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="화면 형식">
           <span className="text-[11px] font-medium text-slate-600 sm:text-xs">화면</span>
@@ -648,8 +665,8 @@ export default function BaggageCarouselBoard() {
             onClick={() => setDisplayMode("cards")}
             className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
               displayMode === "cards"
-                ? "border-indigo-700 bg-indigo-700 text-white"
-                : "border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50"
+                ? "border-slate-800 bg-slate-800 text-white"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
             목록
@@ -659,8 +676,8 @@ export default function BaggageCarouselBoard() {
             onClick={() => setDisplayMode("table")}
             className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
               displayMode === "table"
-                ? "border-indigo-700 bg-indigo-700 text-white"
-                : "border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50"
+                ? "border-slate-800 bg-slate-800 text-white"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
             격자
@@ -682,8 +699,8 @@ export default function BaggageCarouselBoard() {
             }
             className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
               hideKeCodeshareFlights
-                ? "border-violet-700 bg-violet-700 text-white"
-                : "border-violet-200 bg-white text-violet-900 hover:bg-violet-50"
+                ? "border-slate-800 bg-slate-800 text-white"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
             코드셰어
@@ -708,8 +725,8 @@ export default function BaggageCarouselBoard() {
             }
             className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
               kePinkHighlight
-                ? "border-pink-500 bg-pink-400 text-pink-950"
-                : "border-pink-200 bg-white text-pink-900 hover:bg-pink-50"
+                ? "border-rose-400 bg-rose-100 text-rose-900"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
             KE
@@ -741,7 +758,7 @@ export default function BaggageCarouselBoard() {
             id="date-select"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
-            className="w-full max-w-[220px] rounded-md border border-emerald-300 bg-white px-2.5 py-2.5 text-base font-medium text-emerald-800 outline-none ring-emerald-200 focus:ring sm:py-1.5 sm:text-xs"
+            className="w-full max-w-[220px] rounded-md border border-slate-300 bg-white px-2.5 py-2.5 text-base font-medium text-slate-800 outline-none ring-slate-200 focus:ring sm:py-1.5 sm:text-xs"
           >
             {availableDates.map((date) => (
               <option key={date} value={date}>
@@ -812,9 +829,9 @@ export default function BaggageCarouselBoard() {
       </header>
 
       {displayMode === "cards" ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
           {visibleSlots.length === 0 ? (
-            <p className="text-sm text-slate-500">표시할 항공편이 없습니다. 필터나 날짜를 바꿔 보세요.</p>
+            <EmptyState message="현재 운항 정보가 없습니다. 필터나 날짜를 확인해 주세요." />
           ) : (
             <div className="space-y-6">
               {hours.map((hour) => {
@@ -822,7 +839,7 @@ export default function BaggageCarouselBoard() {
                 if (!items?.length && !LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) return null;
                 return (
                   <section key={hour}>
-                    <h2 className="mb-2 border-b border-slate-200 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 sm:text-lg">
+                    <h2 className="sticky top-0 z-10 mb-2 border-b border-slate-200 bg-white/95 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 backdrop-blur-sm sm:text-lg">
                       {hour}
                     </h2>
                     {!items?.length ? (
@@ -836,7 +853,7 @@ export default function BaggageCarouselBoard() {
                           <li key={slotKey}>
                             <article
                               data-baggage-slot={slotKey}
-                              className={`relative flex items-center gap-1.5 rounded-lg border p-3 text-xs leading-relaxed text-slate-800 shadow-sm transition-[box-shadow,background-color] duration-200 ${slotShellClass(
+                              className={`relative flex items-center gap-1.5 rounded-lg border p-3 text-xs leading-relaxed text-slate-800 transition-[box-shadow,background-color] duration-200 ${slotShellClass(
                                 highlighted,
                                 item.flight,
                                 kePinkHighlight
@@ -844,7 +861,7 @@ export default function BaggageCarouselBoard() {
                             >
                               <div className="min-w-0 flex-1">
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                  <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-800">
+                                  <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-900">
                                     적재대 {item.carousel}번
                                   </span>
                                   <span className="text-[10px] text-slate-500">
@@ -876,9 +893,9 @@ export default function BaggageCarouselBoard() {
           )}
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white">
           {isMobileGridViewport ? (
-            <p className="border-b border-slate-100 bg-white px-3 py-2 text-[10px] leading-snug text-slate-400">
+            <p className="border-b border-slate-100 bg-white px-3 py-2 text-[10px] leading-snug text-slate-500">
               격자는 두 손가락으로 벌리거나 모아 확대·축소할 수 있어요.
             </p>
           ) : null}
@@ -902,7 +919,7 @@ export default function BaggageCarouselBoard() {
               }
             >
               <table className="w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]">
-              <thead className="sticky top-0 z-20 bg-slate-50 shadow-[0_1px_0_rgba(0,0,0,0.06)] ring-1 ring-slate-200/60">
+              <thead className="sticky top-0 z-20 bg-slate-50 ring-1 ring-slate-200/60">
                 <GridHeaderRow guideVisible={carouselGuideVisible} onToggleGuide={toggleCarouselGuide} />
               </thead>
               <tbody>
