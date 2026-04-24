@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   buildHourRows,
   compareSlotsByEstimatedArrival,
@@ -86,6 +86,20 @@ const latestDateKey = (byDate: Record<string, BaggageSlot[]>): string => {
   return keys.length > 0 ? keys[keys.length - 1] : "";
 };
 
+const todaySeoulKey = (): string =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+const preferredDateKey = (byDate: Record<string, BaggageSlot[]>): string => {
+  const today = todaySeoulKey();
+  if (byDate[today]?.length) return today;
+  return latestDateKey(byDate);
+};
+
 /**
  * `typeOfFlight` 빈 API 행은 같은 편·적재대의 ‘구분 있음’ 행과 중복으로 뜨는 경우가 많아 제외.
  * 고정 스케줄(`fixedSchedule`)은 구분 필드가 비어 있으므로 항상 유지.
@@ -102,9 +116,13 @@ export function useBaggageData() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [selectedDate, setSelectedDate] = useState(() => latestDateKey(fixedSlotsByDate));
-  /** 새로고침·첫 진입: 첫 로딩이 끝날 때까지 기준 날짜를 항상 데이터상 최신 날짜로 맞춤. 이후에는 사용자 선택 유지. */
-  const pinSelectedToLatestUntilReadyRef = useRef(true);
+  const [selectedDate, setSelectedDate] = useState(() => preferredDateKey(fixedSlotsByDate));
+  const [userSelectedDate, setUserSelectedDate] = useState(false);
+
+  const handleSelectDate = useCallback((date: string) => {
+    setUserSelectedDate(true);
+    setSelectedDate(date);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -182,24 +200,23 @@ export function useBaggageData() {
     };
   }, []);
 
-  /** 기준 날짜: 로딩 중·첫 로딩 직후에는 항상 최신 날짜 키로 고정. 이후에는 유효하면 유지, 없으면 최신으로. */
+  /** 기준 날짜: 첫 진입/새로고침은 오늘(서울) 우선으로 고정. 날짜를 직접 바꾸면 사용자 선택 유지. */
   useEffect(() => {
     const keys = Object.keys(slotsByDate).sort();
     if (keys.length === 0) {
       setSelectedDate("");
       return;
     }
-    const latest = keys[keys.length - 1] ?? "";
-    if (pinSelectedToLatestUntilReadyRef.current) {
-      setSelectedDate(latest);
-      if (!loading) pinSelectedToLatestUntilReadyRef.current = false;
+    if (!userSelectedDate) {
+      setSelectedDate(preferredDateKey(slotsByDate));
       return;
     }
+    const latest = keys[keys.length - 1] ?? "";
     setSelectedDate((curr) => {
       if (curr && slotsByDate[curr]?.length) return curr;
       return latest;
     });
-  }, [slotsByDate, loading]);
+  }, [slotsByDate, userSelectedDate]);
 
   const slots = useMemo(() => {
     if (!selectedDate) return [];
@@ -225,7 +242,7 @@ export function useBaggageData() {
     slots,
     slotsByDate,
     selectedDate,
-    setSelectedDate,
+    setSelectedDate: handleSelectDate,
     loading,
     error,
     lastUpdated,

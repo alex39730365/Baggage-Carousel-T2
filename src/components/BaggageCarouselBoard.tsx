@@ -829,7 +829,6 @@ export default function BaggageCarouselBoard() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="화면 형식">
-          <span className="text-[11px] font-medium text-slate-600 sm:text-xs">화면</span>
           <button
             type="button"
             onClick={() => setDisplayMode("cards")}
@@ -839,7 +838,7 @@ export default function BaggageCarouselBoard() {
                 : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
-            목록
+            모바일
           </button>
           <button
             type="button"
@@ -850,7 +849,7 @@ export default function BaggageCarouselBoard() {
                 : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
-            격자
+            캐러셀 현황
           </button>
           <button
             type="button"
