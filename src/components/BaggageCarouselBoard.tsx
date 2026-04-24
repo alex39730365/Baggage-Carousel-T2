@@ -542,14 +542,6 @@ export default function BaggageCarouselBoard() {
     if (!isGridTableMode(displayMode)) setMobileGridZoom(1);
   }, [displayMode]);
 
-  const zoomInGrid = useCallback(() => {
-    setMobileGridZoom((prev) => clampMobileGridZoom(prev + 0.15));
-  }, []);
-
-  const zoomOutGrid = useCallback(() => {
-    setMobileGridZoom((prev) => clampMobileGridZoom(prev - 0.15));
-  }, []);
-
   const cancelProcessingPopoverLeaveTimer = useCallback(() => {
     const t = processingPopoverLeaveTimerRef.current;
     if (t !== null) {
@@ -1136,30 +1128,6 @@ export default function BaggageCarouselBoard() {
         </div>
       ) : displayMode === "processing" ? (
         <div className="rounded-xl border border-indigo-200 bg-white">
-          <div className="flex items-center justify-between gap-2 border-b border-indigo-100 bg-indigo-50 px-3 py-2 sm:px-4">
-            <p className="text-xs font-bold text-indigo-950 sm:text-sm">수화물 처리 시간</p>
-            <div className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-white/80 px-1 py-1">
-              <button
-                type="button"
-                onClick={zoomOutGrid}
-                disabled={mobileGridZoom <= MOBILE_GRID_ZOOM_MIN + 0.0001}
-                className="rounded border border-indigo-300 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-indigo-100 disabled:text-indigo-300 sm:text-xs"
-                aria-label="표 축소"
-                title="축소"
-              >
-                -
-              </button>
-              <button
-                type="button"
-                onClick={zoomInGrid}
-                className="rounded border border-indigo-300 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 sm:text-xs"
-                aria-label="표 확대"
-                title="확대"
-              >
-                +
-              </button>
-            </div>
-          </div>
           {visibleSlots.length === 0 ? (
             <div className="p-3 sm:p-4">
               <EmptyState message="현재 운항 정보가 없습니다. 필터나 날짜를 확인해 주세요." />
@@ -1205,30 +1173,6 @@ export default function BaggageCarouselBoard() {
         </div>
       ) : (
         <div className="rounded-xl border border-rose-200 bg-white">
-          <div className="flex items-center justify-between gap-2 border-b border-rose-100 bg-rose-50 px-3 py-2 sm:px-4">
-            <p className="text-xs font-bold text-rose-950 sm:text-sm">캐러셀 현황</p>
-            <div className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white/80 px-1 py-1">
-              <button
-                type="button"
-                onClick={zoomOutGrid}
-                disabled={mobileGridZoom <= MOBILE_GRID_ZOOM_MIN + 0.0001}
-                className="rounded border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-800 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-rose-100 disabled:text-rose-300 sm:text-xs"
-                aria-label="표 축소"
-                title="축소"
-              >
-                -
-              </button>
-              <button
-                type="button"
-                onClick={zoomInGrid}
-                className="rounded border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-800 hover:bg-rose-50 sm:text-xs"
-                aria-label="표 확대"
-                title="확대"
-              >
-                +
-              </button>
-            </div>
-          </div>
           {isMobileGridViewport ? (
             <p className="border-b border-rose-50 bg-white px-3 py-2 text-[10px] leading-snug text-slate-500">
               격자는 두 손가락으로 벌리거나 모아 확대·축소할 수 있어요.
