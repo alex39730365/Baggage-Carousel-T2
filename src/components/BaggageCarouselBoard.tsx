@@ -125,6 +125,7 @@ const persistListProcessingHoverPopover = (enabled: boolean) => {
 };
 
 const DISPLAY_MODE_STORAGE_KEY = "baggage-display-mode-v1";
+const DISPLAY_MODE_SESSION_KEY = "baggage-display-mode-session-v1";
 const KE_CODESHARE_FILTER_STORAGE_KEY = "baggage-ke-codeshare-filter-v1";
 /** localStorage 실패 시 같은 탭 새로고침용 보조 저장 */
 const KE_CODESHARE_FILTER_SESSION_KEY = "baggage-ke-codeshare-filter-session-v1";
@@ -132,7 +133,7 @@ const KE_CODESHARE_FILTER_SESSION_KEY = "baggage-ke-codeshare-filter-session-v1"
 const loadDisplayMode = (): DisplayMode | null => {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+    const raw = sessionStorage.getItem(DISPLAY_MODE_SESSION_KEY);
     if (raw === "cards" || raw === "table" || raw === "processing") return raw;
   } catch {
     // ignore
@@ -142,7 +143,7 @@ const loadDisplayMode = (): DisplayMode | null => {
 
 const persistDisplayMode = (mode: DisplayMode) => {
   try {
-    localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, mode);
+    sessionStorage.setItem(DISPLAY_MODE_SESSION_KEY, mode);
   } catch {
     // ignore
   }
@@ -492,12 +493,7 @@ export default function BaggageCarouselBoard() {
     useBaggageData();
   const [keyword, setKeyword] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("terminal2");
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
-    const saved = loadDisplayMode();
-    if (saved) return saved;
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) return "cards";
-    return "table";
-  });
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => loadDisplayMode() ?? "table");
   const [hideKeCodeshareFlights, setHideKeCodeshareFlights] = useState(() => loadKeCodeshareFilter());
   const [kePinkHighlight, setKePinkHighlight] = useState(() => loadKePinkHighlight());
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
