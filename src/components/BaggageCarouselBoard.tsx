@@ -4,11 +4,22 @@ import { useBaggageData } from "../hooks/useBaggageData";
 import {
   collapseDuplicateFlightsPreferClassified,
   compareSlotsByEstimatedArrival,
+  diffMinutesBaggageFirstLast,
   getSlotDedupeKey,
   getSortableMinuteOfDay,
   sanitizeFlightDisplay,
 } from "../lib/baggageApi";
 import { BaggageSlot } from "../types";
+import { CarouselDataGrid } from "./CarouselDataGrid";
+
+/** 목록·시트·호버 팝오버 쌓임 (Tailwind z 단계와 맞춤) */
+const Z_LIST_CARD_RAISED = "z-30";
+const Z_LIST_TOOLBAR = "z-40";
+const Z_LIST_HOVER_POPOVER = "z-50";
+const Z_SHEET_BACKDROP = "z-[90]";
+const Z_SHEET_PANEL = "z-[100]";
+/** 목록 상단 스티키 바 높이 — 시간대 제목 `sticky top`과 동일 값 */
+const LIST_STICKY_TOOLBAR_HEIGHT = "2.75rem";
 
 const HIGHLIGHT_STORAGE_KEY = "baggage-highlight-keys-v2";
 
@@ -54,11 +65,6 @@ const highlightMarkButtonClassList = `${highlightMarkButtonBaseClass} text-[15px
 const NAVIGATE_FLASH_MS = 2200;
 const navigateFlashShellClass = "z-[1] bg-sky-50 ring-2 ring-sky-300";
 
-const FIXED_CAROUSELS = Array.from({ length: 20 }, (_, i) => i + 1);
-/** 10번·11번 캐로셀 헤더를 누르면 토글 — 10번 열 오른쪽(10↔11 사이) 빨간 가이드 */
-const CAROUSEL_GUIDE_AFTER_NO = 10;
-const CAROUSEL_GUIDE_TOGGLE_NOS = new Set([10, 11]);
-const carouselGuideLineClass = "border-r-[3px] border-r-red-600";
 const CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY = "baggage-carousel-10-11-guide-v1";
 
 const loadCarouselGuideVisible = (): boolean => {
@@ -81,8 +87,10 @@ const persistCarouselGuideVisible = (visible: boolean) => {
   }
 };
 
-/** 목록(cards) 뷰에서 비어 있어도 구간은 반드시 보이게 할 시간대 */
-const LIST_VIEW_ALWAYS_SHOW_HOURS = new Set(["22:00", "23:00"]);
+/** 목록(cards) 뷰에서 비어 있어도 시간대 제목·안내가 보이게 할 구간(14시~23시) */
+const LIST_VIEW_ALWAYS_SHOW_HOURS = new Set(
+  Array.from({ length: 10 }, (_, i) => `${String(14 + i).padStart(2, "0")}:00`)
+);
 
 /** 모바일 격자 보기 확대 (핀치·버튼). */
 const MOBILE_GRID_ZOOM_MIN = 0.55;
@@ -90,65 +98,31 @@ const MOBILE_GRID_ZOOM_MAX = 1.85;
 const clampMobileGridZoom = (z: number) =>
   Math.min(MOBILE_GRID_ZOOM_MAX, Math.max(MOBILE_GRID_ZOOM_MIN, z));
 type TabKey = "all" | "terminal1" | "terminal2" | "unknown";
-type DisplayMode = "cards" | "table";
+type DisplayMode = "cards" | "table" | "processing";
 
-/** 격자 왼쪽 모서리 헤더: 좁은 열 안에 시간·캐로셀 안내 */
-function CornerHeaderCell() {
-  return (
-    <div className="flex w-full min-w-0 flex-col items-center justify-center gap-0.5 py-0.5 text-[7px] font-semibold leading-tight sm:text-[8px]">
-      <span className="shrink-0 font-bold text-slate-950">시간</span>
-      <span className="shrink-0 font-medium text-slate-600">캐로셀</span>
-    </div>
-  );
-}
+const isGridTableMode = (m: DisplayMode) => m === "table" || m === "processing";
 
-/** 격자 맨 위 캐로셀 행 */
-function GridHeaderRow({
-  guideVisible,
-  onToggleGuide,
-}: {
-  guideVisible: boolean;
-  onToggleGuide: () => void;
-}) {
-  return (
-    <tr>
-      <th className="w-9 min-w-0 border border-slate-200 bg-slate-50 px-0.5 py-1 font-semibold text-slate-700 sm:w-10 sm:py-1.5">
-        <CornerHeaderCell />
-      </th>
-      {FIXED_CAROUSELS.map((no) => {
-        const guideLine = guideVisible && no === CAROUSEL_GUIDE_AFTER_NO;
-        const togglesGuide = CAROUSEL_GUIDE_TOGGLE_NOS.has(no);
-        return (
-          <th
-            key={no}
-            scope="col"
-            className={`min-w-0 border border-slate-200 bg-yellow-100 px-0.5 py-1 text-center text-[9px] font-semibold text-slate-800 sm:text-[10px] ${
-              guideLine ? carouselGuideLineClass : ""
-            }`}
-          >
-            {togglesGuide ? (
-              <button
-                type="button"
-                className="w-full rounded-sm py-0.5 font-inherit text-inherit hover:bg-yellow-200/80 active:bg-yellow-300/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-red-600"
-                onClick={onToggleGuide}
-                aria-pressed={guideVisible}
-                title={
-                  guideVisible
-                    ? "10번·11번 사이 빨간 가이드선 끄기"
-                    : "10번·11번 사이 빨간 가이드선 켜기"
-                }
-              >
-                {no}
-              </button>
-            ) : (
-              no
-            )}
-          </th>
-        );
-      })}
-    </tr>
-  );
-}
+const LIST_PROCESSING_HOVER_KEY = "baggage-list-processing-hover-v1";
+
+const loadListProcessingHoverPopover = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = localStorage.getItem(LIST_PROCESSING_HOVER_KEY);
+    if (raw === "0") return false;
+    if (raw === "1") return true;
+  } catch {
+    // ignore
+  }
+  return true;
+};
+
+const persistListProcessingHoverPopover = (enabled: boolean) => {
+  try {
+    localStorage.setItem(LIST_PROCESSING_HOVER_KEY, enabled ? "1" : "0");
+  } catch {
+    // ignore
+  }
+};
 
 const DISPLAY_MODE_STORAGE_KEY = "baggage-display-mode-v1";
 const KE_CODESHARE_FILTER_STORAGE_KEY = "baggage-ke-codeshare-filter-v1";
@@ -159,7 +133,7 @@ const loadDisplayMode = (): DisplayMode | null => {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
-    if (raw === "cards" || raw === "table") return raw;
+    if (raw === "cards" || raw === "table" || raw === "processing") return raw;
   } catch {
     // ignore
   }
@@ -262,13 +236,107 @@ const TAB_ITEMS: { key: TabKey; label: string }[] = [
   { key: "all", label: "전체" },
   { key: "terminal1", label: "터미널1" },
   { key: "terminal2", label: "터미널2" },
-  { key: "unknown", label: "미지정/기타" },
 ];
 const formatTime = (value: string) => {
   const compact = value.replace(/\D/g, "");
   if (compact.length >= 12) return `${compact.slice(8, 10)}:${compact.slice(10, 12)}`;
   const match = value.match(/(\d{2}:\d{2})/);
   return match ? match[1] : value;
+};
+
+const pickRawString = (raw: Record<string, unknown>, keys: string[]): string => {
+  for (const key of keys) {
+    const v = raw[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const s = String(Math.trunc(v));
+      if (s.replace(/\D/g, "").length >= 8) return s;
+    }
+  }
+  return "";
+};
+
+/** 첫·마지막 수하물 벨트 도착(공공데이터 `bagFirstTime` / `bagLastTime`) 간격(분). */
+const getBaggageProcessingMeta = (
+  item: BaggageSlot
+): { first: string; last: string; firstHm: string; lastHm: string; minutes: number | null } => {
+  const raw = item.raw as Record<string, unknown>;
+  const first = pickRawString(raw, ["bagFirstTime", "bagfirstTime"]);
+  const last = pickRawString(raw, ["bagLastTime", "baglastTime"]);
+  const firstHm = formatTime(first);
+  const lastHm = formatTime(last);
+  if (!first.trim() || !last.trim()) {
+    return { first, last, firstHm, lastHm, minutes: null };
+  }
+  const minutes = diffMinutesBaggageFirstLast(first, last);
+  return { first, last, firstHm, lastHm, minutes };
+};
+
+/** 첫·마지막 벨트 시각 중 하나라도 있으면(진행 중 포함) 처리 시간 탭·ⓘ 등에서 의미 있음 */
+const hasBaggageProcessingTimes = (item: BaggageSlot): boolean => {
+  const raw = item.raw as Record<string, unknown>;
+  return (
+    Boolean(pickRawString(raw, ["bagFirstTime", "bagfirstTime"])) ||
+    Boolean(pickRawString(raw, ["bagLastTime", "baglastTime"]))
+  );
+};
+
+const ProcessingSlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) => {
+  const raw = item.raw as Record<string, unknown>;
+  const firstRaw = pickRawString(raw, ["bagFirstTime", "bagfirstTime"]);
+  const lastRaw = pickRawString(raw, ["bagLastTime", "baglastTime"]);
+  const hasFirst = Boolean(firstRaw.trim());
+  const hasLast = Boolean(lastRaw.trim());
+  const hasAny = hasFirst || hasLast;
+  const { firstHm, lastHm, minutes } = getBaggageProcessingMeta(item);
+  if (!hasAny) {
+    return compact ? (
+      <p className="min-w-0 text-[9px] leading-tight text-slate-400 [overflow-wrap:anywhere]">처리시간 없음</p>
+    ) : (
+      <p className="text-xs text-slate-400">처리시간 없음</p>
+    );
+  }
+  return compact ? (
+    <>
+      <p className="min-w-0 max-w-full break-words text-[11px] font-bold leading-tight text-slate-950 [overflow-wrap:anywhere]">
+        {formatFlightAirportLine(item)}
+      </p>
+      <p className="min-w-0 max-w-full break-words leading-tight text-slate-700 [overflow-wrap:anywhere]">
+        {hasFirst ? (
+          <>
+            <span className="font-bold tabular-nums text-slate-900">{firstHm}</span>
+            <span className="text-slate-500"> ~ </span>
+          </>
+        ) : (
+          <span className="text-slate-500">— ~ </span>
+        )}
+        {hasLast ? (
+          <span className="font-bold tabular-nums text-slate-900">{lastHm}</span>
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </p>
+      {minutes != null && (
+        <p className="text-[10px] font-semibold tabular-nums text-indigo-700 sm:text-[11px]">소요 {minutes}분</p>
+      )}
+    </>
+  ) : (
+    <>
+      <p className="text-sm font-bold text-slate-950">{formatFlightAirportLine(item)}</p>
+      <p className="text-slate-700">
+        {hasFirst ? (
+          <>
+            <span className="font-bold tabular-nums">{firstHm}</span>
+            <span className="text-slate-500"> ~ </span>
+          </>
+        ) : (
+          <span className="text-slate-400">— ~ </span>
+        )}
+        {hasLast ? <span className="font-bold tabular-nums">{lastHm}</span> : <span className="text-slate-400">—</span>}
+      </p>
+      {minutes != null && <p className="text-sm font-semibold text-indigo-700">소요 {minutes}분</p>}
+    </>
+  );
 };
 
 const getAirportCode = (raw: Record<string, unknown>): string => {
@@ -377,12 +445,24 @@ const EmptyState = ({ message }: { message: string }) => (
   </div>
 );
 
-const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean }) => {
+const SlotDetail = ({
+  item,
+  compact,
+  flightLineClassName,
+}: {
+  item: BaggageSlot;
+  compact?: boolean;
+  /** 목록 등: 편명 줄에 `cursor-help` 등 */
+  flightLineClassName?: string;
+}) => {
   const timeStr = formatTime(item.estimatedTime);
   const standStr = getStand(item.raw);
+  const flightLineExtra = flightLineClassName?.trim() ? ` ${flightLineClassName.trim()}` : "";
   return compact ? (
     <>
-      <p className="min-w-0 max-w-full break-words text-[11px] font-bold leading-tight text-slate-950 [overflow-wrap:anywhere]">
+      <p
+        className={`min-w-0 max-w-full break-words text-[11px] font-bold leading-tight text-slate-950 [overflow-wrap:anywhere]${flightLineExtra}`}
+      >
         {formatFlightAirportLine(item)}
       </p>
       <TimeStandLine time={timeStr} stand={standStr} compact />
@@ -394,7 +474,7 @@ const SlotDetail = ({ item, compact }: { item: BaggageSlot; compact?: boolean })
     </>
   ) : (
     <>
-      <p className="text-sm font-bold text-slate-950">
+      <p className={`text-sm font-bold text-slate-950${flightLineExtra}`}>
         {formatFlightAirportLine(item)}
       </p>
       <TimeStandLine time={timeStr} stand={standStr} />
@@ -423,6 +503,15 @@ export default function BaggageCarouselBoard() {
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
+  /** 목록: 항공편 호버 시 뜨는 수화물 처리 시간 작은 창 */
+  const [listProcessingHoverPopover, setListProcessingHoverPopover] = useState(
+    () => loadListProcessingHoverPopover()
+  );
+  const [processingPopoverSlotKey, setProcessingPopoverSlotKey] = useState<string | null>(null);
+  const processingPopoverLeaveTimerRef = useRef<number | null>(null);
+  /** (hover: none) — 터치 위주 기기에서 목록 카드 ⓘ 시트 */
+  const [prefersNoHover, setPrefersNoHover] = useState(false);
+  const [listProcessingSheetSlotKey, setListProcessingSheetSlotKey] = useState<string | null>(null);
   const [isMobileGridViewport, setIsMobileGridViewport] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 639px)").matches : false
   );
@@ -431,7 +520,6 @@ export default function BaggageCarouselBoard() {
   const tablePinchWrapRef = useRef<HTMLDivElement>(null);
   const pinchGestureRef = useRef<{ dist0: number; zoom0: number } | null>(null);
   const [carouselGuideVisible, setCarouselGuideVisible] = useState(() => loadCarouselGuideVisible());
-
   mobileGridZoomRef.current = mobileGridZoom;
 
   const toggleCarouselGuide = useCallback(() => {
@@ -451,18 +539,82 @@ export default function BaggageCarouselBoard() {
   }, []);
 
   useEffect(() => {
-    if (displayMode !== "table" || !isMobileGridViewport) setMobileGridZoom(1);
+    if (!isGridTableMode(displayMode) || !isMobileGridViewport) setMobileGridZoom(1);
   }, [displayMode, isMobileGridViewport]);
+
+  const cancelProcessingPopoverLeaveTimer = useCallback(() => {
+    const t = processingPopoverLeaveTimerRef.current;
+    if (t !== null) {
+      window.clearTimeout(t);
+      processingPopoverLeaveTimerRef.current = null;
+    }
+  }, []);
+
+  const openProcessingPopover = useCallback(
+    (key: string) => {
+      if (!listProcessingHoverPopover) return;
+      cancelProcessingPopoverLeaveTimer();
+      setProcessingPopoverSlotKey(key);
+    },
+    [cancelProcessingPopoverLeaveTimer, listProcessingHoverPopover]
+  );
+
+  const scheduleCloseProcessingPopover = useCallback(() => {
+    cancelProcessingPopoverLeaveTimer();
+    processingPopoverLeaveTimerRef.current = window.setTimeout(() => {
+      setProcessingPopoverSlotKey(null);
+      processingPopoverLeaveTimerRef.current = null;
+    }, 220);
+  }, [cancelProcessingPopoverLeaveTimer]);
 
   useEffect(() => {
     return () => {
       if (navigateFlashTimerRef.current !== null) window.clearTimeout(navigateFlashTimerRef.current);
+      cancelProcessingPopoverLeaveTimer();
     };
+  }, [cancelProcessingPopoverLeaveTimer]);
+
+  useEffect(() => {
+    if (displayMode !== "cards") {
+      cancelProcessingPopoverLeaveTimer();
+      setProcessingPopoverSlotKey(null);
+      setListProcessingSheetSlotKey(null);
+    }
+  }, [displayMode, cancelProcessingPopoverLeaveTimer]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(hover: none)");
+    const sync = () => setPrefersNoHover(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (listProcessingSheetSlotKey) {
+        e.preventDefault();
+        setListProcessingSheetSlotKey(null);
+        return;
+      }
+      if (processingPopoverSlotKey) {
+        e.preventDefault();
+        cancelProcessingPopoverLeaveTimer();
+        setProcessingPopoverSlotKey(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [listProcessingSheetSlotKey, processingPopoverSlotKey, cancelProcessingPopoverLeaveTimer]);
 
   useEffect(() => {
     persistDisplayMode(displayMode);
   }, [displayMode]);
+
+  useEffect(() => {
+    persistListProcessingHoverPopover(listProcessingHoverPopover);
+  }, [listProcessingHoverPopover]);
 
   const toggleHighlightKey = useCallback((slotKey: string) => {
     setHighlightKeys((prev) => {
@@ -517,8 +669,13 @@ export default function BaggageCarouselBoard() {
     return collapseDuplicateFlightsPreferClassified(list);
   }, [slots, activeTab, hideKeCodeshareFlights]);
 
+  const listSheetSlotItem = useMemo(() => {
+    if (!listProcessingSheetSlotKey) return null;
+    return visibleSlots.find((s) => getSlotDedupeKey(s) === listProcessingSheetSlotKey) ?? null;
+  }, [listProcessingSheetSlotKey, visibleSlots]);
+
   useEffect(() => {
-    if (!isMobileGridViewport || displayMode !== "table") return;
+    if (!isMobileGridViewport || !isGridTableMode(displayMode)) return;
     const el = tablePinchWrapRef.current;
     if (!el) return;
 
@@ -626,9 +783,22 @@ export default function BaggageCarouselBoard() {
     return out;
   }, [visibleSlots]);
 
+  /** 목록에서 시간대 순 첫 카드 — 스티키 시간줄·상단바에 툴팁이 겹침 → 해당 카드만 툴팁을 아래로 살짝 이동 */
+  const firstListCardSlotKey = useMemo(() => {
+    for (const hour of hours) {
+      const items = cardSlotsByHour.get(hour);
+      if (!items?.length) {
+        if (!LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) continue;
+        continue;
+      }
+      return getSlotDedupeKey(items[0]!);
+    }
+    return null;
+  }, [hours, cardSlotsByHour]);
+
   /** 격자: 마지막 행·모바일 줌이 홈 인디케이터 등에 가려지지 않게 스크롤 끝 여유 */
   const tableBottomScrollSpacerClass =
-    displayMode === "table" && isMobileGridViewport
+    isGridTableMode(displayMode) && isMobileGridViewport
       ? "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]"
       : "";
 
@@ -638,7 +808,7 @@ export default function BaggageCarouselBoard() {
    * 모바일에서 확대로 가로가 넘칠 때만 가로 스크롤을 켜고 `overflow-y-clip`으로 세로 sticky는 유지.
    */
   const gridNeedsHorizontalScroll =
-    displayMode === "table" && isMobileGridViewport && mobileGridZoom > 1.001;
+    isGridTableMode(displayMode) && isMobileGridViewport && mobileGridZoom > 1.001;
 
   return (
     <>
@@ -682,36 +852,21 @@ export default function BaggageCarouselBoard() {
           >
             격자
           </button>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="코드셰어 편명 정리">
-          <span className="text-[11px] font-medium text-slate-600 sm:text-xs">편명</span>
           <button
             type="button"
-            aria-pressed={hideKeCodeshareFlights}
-            title="켜면 7C·AF 등 2자+숫자 4자리는 숨기고, KE 2xxx·KE 8xxx만 예외로 남깁니다."
-            onClick={() =>
-              setHideKeCodeshareFlights((prev) => {
-                const next = !prev;
-                persistKeCodeshareFilter(next);
-                return next;
-              })
-            }
+            onClick={() => setDisplayMode("processing")}
+            title="첫·마지막 수하물 벨트 도착 시각을 격자와 같은 표 형태로 봅니다."
             className={`rounded-md border px-3 py-2.5 text-[11px] font-medium sm:px-2.5 sm:py-1.5 sm:text-xs ${
-              hideKeCodeshareFlights
+              displayMode === "processing"
                 ? "border-slate-800 bg-slate-800 text-white"
                 : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
-            코드셰어
+            수화물 처리 시간
           </button>
-          {hideKeCodeshareFlights ? (
-            <span className="text-[10px] text-slate-500 sm:text-[11px]">
-              7C/XX 4자리 숨김 · KE 2xxx·8xxx만 표시
-            </span>
-          ) : (
-            <span className="text-[10px] text-slate-400 sm:text-[11px]">2글자+4자리 편 전부 표시</span>
-          )}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="편명 강조">
           <button
             type="button"
             aria-pressed={kePinkHighlight}
@@ -733,24 +888,7 @@ export default function BaggageCarouselBoard() {
           </button>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="강조 표시">
-          <button
-            type="button"
-            onClick={clearAllHighlights}
-            disabled={highlightKeys.size === 0}
-            aria-label="목록·격자에서 지정한 강조 표시를 전부 해제하고 저장도 비웁니다"
-            className="rounded-md border border-amber-300 bg-white px-3 py-2.5 text-[11px] font-medium text-amber-900 hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 sm:px-2.5 sm:py-1.5 sm:text-xs"
-          >
-            강조 모두 해제
-          </button>
-          {highlightKeys.size > 0 ? (
-            <span className="text-[10px] text-slate-500 sm:text-[11px]">{highlightKeys.size}건 지정됨</span>
-          ) : (
-            <span className="text-[10px] text-slate-400 sm:text-[11px]">지정 없음</span>
-          )}
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <label htmlFor="date-select" className="text-[11px] font-medium text-slate-600 sm:text-xs">
             기준 날짜
           </label>
@@ -811,7 +949,7 @@ export default function BaggageCarouselBoard() {
                             ? "bg-pink-50 text-slate-900 hover:bg-pink-100/90"
                             : "bg-transparent text-slate-700 hover:bg-slate-100/80"
                       }`}
-                      aria-label={`${row.flight} 목록·격자에서 해당 위치로 이동`}
+                      aria-label={`${row.flight} 목록·격자·수화물 처리 시간에서 해당 위치로 이동`}
                     >
                       {row.flight} — 시간{" "}
                       <span className="font-bold tabular-nums text-slate-950">{row.time}</span> — 적재대{" "}
@@ -829,31 +967,70 @@ export default function BaggageCarouselBoard() {
       </header>
 
       {displayMode === "cards" ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
-          {visibleSlots.length === 0 ? (
-            <EmptyState message="현재 운항 정보가 없습니다. 필터나 날짜를 확인해 주세요." />
-          ) : (
-            <div className="space-y-6">
+        <div
+          className="overflow-visible rounded-xl border border-slate-200 bg-white"
+          style={{ ["--list-toolbar-h" as string]: LIST_STICKY_TOOLBAR_HEIGHT } as CSSProperties}
+        >
+          {visibleSlots.length > 0 ? (
+            <div
+              className={`sticky top-0 ${Z_LIST_TOOLBAR} flex min-h-[var(--list-toolbar-h)] items-center justify-end border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-sm sm:px-4`}
+            >
+              <button
+                type="button"
+                aria-pressed={listProcessingHoverPopover}
+                title={
+                  listProcessingHoverPopover
+                    ? "항공편에 마우스를 올렸을 때 뜨는 수화물 처리 시간 창을 끕니다."
+                    : "수화물 처리 시간 작은 창을 다시 표시합니다."
+                }
+                onClick={() => {
+                  setListProcessingHoverPopover((prev) => {
+                    const next = !prev;
+                    if (!next) {
+                      cancelProcessingPopoverLeaveTimer();
+                      setProcessingPopoverSlotKey(null);
+                      setListProcessingSheetSlotKey(null);
+                    }
+                    return next;
+                  });
+                }}
+                className={`rounded-md border px-2.5 py-1.5 text-[10px] font-semibold leading-tight shadow-sm sm:px-3 sm:text-[11px] ${
+                  listProcessingHoverPopover
+                    ? "border-slate-800 bg-slate-800 text-white"
+                    : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                처리 시간
+              </button>
+            </div>
+          ) : null}
+          <div className="p-3 sm:p-4">
+            {visibleSlots.length === 0 ? (
+              <EmptyState message="현재 운항 정보가 없습니다. 필터나 날짜를 확인해 주세요." />
+            ) : (
+              <div className="space-y-6 overflow-visible">
               {hours.map((hour) => {
                 const items = cardSlotsByHour.get(hour);
                 if (!items?.length && !LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) return null;
                 return (
-                  <section key={hour}>
-                    <h2 className="sticky top-0 z-10 mb-2 border-b border-slate-200 bg-white/95 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 backdrop-blur-sm sm:text-lg">
+                  <section key={hour} className="overflow-visible pb-1">
+                    <h2 className="sticky top-[var(--list-toolbar-h)] z-10 mb-2 border-b border-slate-200 bg-white/95 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 backdrop-blur-sm sm:text-lg">
                       {hour}
                     </h2>
                     {!items?.length ? (
                       <p className="text-sm text-slate-500">이 시간대에 표시할 항공편이 없습니다.</p>
                     ) : (
-                    <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <ul className="grid gap-2 overflow-visible sm:grid-cols-2 lg:grid-cols-3">
                       {items.map((item) => {
                         const slotKey = getSlotDedupeKey(item);
                         const highlighted = highlightKeys.has(slotKey);
+                        const popoverOpen =
+                          listProcessingHoverPopover && processingPopoverSlotKey === slotKey;
                         return (
-                          <li key={slotKey}>
+                          <li key={slotKey} className="overflow-visible">
                             <article
                               data-baggage-slot={slotKey}
-                              className={`relative flex items-center gap-1.5 rounded-lg border p-3 text-xs leading-relaxed text-slate-800 transition-[box-shadow,background-color] duration-200 ${slotShellClass(
+                              className={`relative flex items-center gap-1.5 overflow-visible rounded-lg border p-3 text-xs leading-relaxed text-slate-800 transition-[box-shadow,background-color] duration-200 ${popoverOpen ? Z_LIST_CARD_RAISED : "z-0"} ${slotShellClass(
                                 highlighted,
                                 item.flight,
                                 kePinkHighlight
@@ -868,18 +1045,72 @@ export default function BaggageCarouselBoard() {
                                     터미널 {getTerminal(item.raw) || "—"}
                                   </span>
                                 </div>
-                                <SlotDetail item={item} />
+                                <div
+                                  className="relative min-w-0"
+                                  onMouseEnter={
+                                    prefersNoHover
+                                      ? undefined
+                                      : () => openProcessingPopover(slotKey)
+                                  }
+                                  onMouseLeave={prefersNoHover ? undefined : scheduleCloseProcessingPopover}
+                                >
+                                  <SlotDetail
+                                    item={item}
+                                    flightLineClassName={
+                                      listProcessingHoverPopover && !prefersNoHover
+                                        ? "cursor-help"
+                                        : undefined
+                                    }
+                                  />
+                                  {popoverOpen ? (
+                                    <div
+                                      className={`absolute bottom-full left-1/2 ${Z_LIST_HOVER_POPOVER} mb-2 w-max min-w-[14rem] max-w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl ring-1 ring-slate-900/10 ${
+                                        slotKey === firstListCardSlotKey
+                                          ? "translate-y-3 sm:translate-y-5"
+                                          : ""
+                                      }`}
+                                      onMouseEnter={cancelProcessingPopoverLeaveTimer}
+                                      onMouseLeave={scheduleCloseProcessingPopover}
+                                      role="tooltip"
+                                      aria-live="polite"
+                                    >
+                                      <p className="mb-2 border-b border-slate-100 pb-1.5 text-[11px] font-bold text-slate-900">
+                                        수화물 처리 시간
+                                      </p>
+                                      <div className="text-xs leading-relaxed text-slate-800">
+                                        <ProcessingSlotDetail item={item} />
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => toggleHighlightKey(slotKey)}
-                                className={`shrink-0 self-center sm:self-start ${highlightMarkButtonClassList}`}
-                                aria-pressed={highlighted}
-                                aria-label={highlighted ? "강조 해제" : "강조 표시"}
-                                title={highlighted ? "강조 해제" : "강조 표시"}
-                              >
-                                {highlighted ? "★" : "☆"}
-                              </button>
+                              <div className="flex shrink-0 flex-col items-center gap-1 self-stretch sm:self-start">
+                                {prefersNoHover && listProcessingHoverPopover ? (
+                                  <button
+                                    type="button"
+                                    className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-600 hover:bg-slate-50 active:bg-slate-100"
+                                    aria-label="수화물 처리 시간 보기"
+                                    title={
+                                      hasBaggageProcessingTimes(item)
+                                        ? "수화물 처리 시간"
+                                        : "처리 시간 데이터 없음"
+                                    }
+                                    onClick={() => setListProcessingSheetSlotKey(slotKey)}
+                                  >
+                                    ⓘ
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => toggleHighlightKey(slotKey)}
+                                  className={`self-center ${highlightMarkButtonClassList}`}
+                                  aria-pressed={highlighted}
+                                  aria-label={highlighted ? "강조 해제" : "강조 표시"}
+                                  title={highlighted ? "강조 해제" : "강조 표시"}
+                                >
+                                  {highlighted ? "★" : "☆"}
+                                </button>
+                              </div>
                             </article>
                           </li>
                         );
@@ -890,6 +1121,60 @@ export default function BaggageCarouselBoard() {
                 );
               })}
             </div>
+          )}
+          </div>
+        </div>
+      ) : displayMode === "processing" ? (
+        <div className="rounded-xl border border-indigo-200 bg-white">
+          <div className="border-b border-indigo-100 bg-indigo-50 px-3 py-2 sm:px-4">
+            <p className="text-xs font-bold text-indigo-950 sm:text-sm">수화물 처리 시간</p>
+          </div>
+          {visibleSlots.length === 0 ? (
+            <div className="p-3 sm:p-4">
+              <EmptyState message="현재 운항 정보가 없습니다. 필터나 날짜를 확인해 주세요." />
+            </div>
+          ) : (
+            <>
+              {isMobileGridViewport ? (
+                <p className="border-b border-indigo-50 bg-white px-3 py-2 text-[10px] leading-snug text-slate-500">
+                  격자는 두 손가락으로 벌리거나 모아 확대·축소할 수 있어요.
+                </p>
+              ) : null}
+              <div
+                className={
+                  gridNeedsHorizontalScroll
+                    ? "w-full min-w-0 overflow-x-auto overflow-y-clip [-webkit-overflow-scrolling:touch]"
+                    : "w-full min-w-0"
+                }
+              >
+                <div
+                  ref={tablePinchWrapRef}
+                  className="origin-top-left align-top w-full max-w-full min-w-0 [text-size-adjust:100%] [-webkit-text-size-adjust:100%]"
+                  style={
+                    isGridTableMode(displayMode) &&
+                    isMobileGridViewport &&
+                    Math.abs(mobileGridZoom - 1) >= 0.0001
+                      ? ({ zoom: mobileGridZoom } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  <CarouselDataGrid
+                    hours={hours}
+                    byHourCarousel={byHourCarousel}
+                    carouselGuideVisible={carouselGuideVisible}
+                    onToggleGuide={toggleCarouselGuide}
+                    highlightKeys={highlightKeys}
+                    navigateFlashKey={navigateFlashKey}
+                    kePinkHighlight={kePinkHighlight}
+                    toggleHighlightKey={toggleHighlightKey}
+                    variant="processing"
+                    renderCellContent={(item) => <ProcessingSlotDetail item={item} compact />}
+                    slotShellClassFn={slotShellClass}
+                    navigateFlashShellClass={navigateFlashShellClass}
+                  />
+                </div>
+              </div>
+            </>
           )}
         </div>
       ) : (
@@ -910,7 +1195,7 @@ export default function BaggageCarouselBoard() {
               ref={tablePinchWrapRef}
               className="origin-top-left align-top w-full max-w-full min-w-0 [text-size-adjust:100%] [-webkit-text-size-adjust:100%]"
               style={
-                displayMode === "table" &&
+                isGridTableMode(displayMode) &&
                 isMobileGridViewport &&
                 Math.abs(mobileGridZoom - 1) >= 0.0001
                   ? /** `zoom`은 가로·세로 동일 비율. 가로만 width補正하면 세로만 커져 길쭉해 보임(Safari는 글자만 키우는 것처럼 보일 수 있어 text-size-adjust 고정). */
@@ -918,77 +1203,65 @@ export default function BaggageCarouselBoard() {
                   : undefined
               }
             >
-              <table className="w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]">
-              <thead className="sticky top-0 z-20 bg-slate-50 ring-1 ring-slate-200/60">
-                <GridHeaderRow guideVisible={carouselGuideVisible} onToggleGuide={toggleCarouselGuide} />
-              </thead>
-              <tbody>
-                {hours.map((hour) => (
-                  <tr key={hour}>
-                    <td className="w-9 min-w-0 border border-slate-200 bg-slate-50 px-0.5 py-1 text-center text-[9px] font-bold tabular-nums tracking-tight text-slate-950 sm:w-10 sm:text-[10px]">
-                      {hour}
-                    </td>
-                    {FIXED_CAROUSELS.map((carousel) => {
-                      const key = `${hour}-${carousel}`;
-                      const items = byHourCarousel.get(key) ?? [];
-                      return (
-                        <td
-                          key={key}
-                          className={`min-h-[52px] min-w-0 border border-slate-200 align-top p-0.5 sm:min-h-[56px] ${
-                            carouselGuideVisible && carousel === CAROUSEL_GUIDE_AFTER_NO
-                              ? carouselGuideLineClass
-                              : ""
-                          }`}
-                        >
-                          <div className="min-w-0 max-w-full space-y-0.5">
-                            {items.length === 0 ? (
-                              <span className="text-[11px] text-slate-300" />
-                            ) : (
-                              items.map((item, idx) => {
-                                const slotKey = getSlotDedupeKey(item);
-                                const highlighted = highlightKeys.has(slotKey);
-                                return (
-                                  <article
-                                    key={`${slotKey}#${idx}`}
-                                    data-baggage-slot={slotKey}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-pressed={highlighted}
-                                    aria-label={
-                                      highlighted
-                                        ? `${item.flight || "항공편"} 강조 해제 (격자 칸 클릭)`
-                                        : `${item.flight || "항공편"} 강조 표시 (격자 칸 클릭)`
-                                    }
-                                    onClick={() => toggleHighlightKey(slotKey)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        toggleHighlightKey(slotKey);
-                                      }
-                                    }}
-                                    className={`relative min-w-0 max-w-full cursor-pointer touch-manipulation rounded border p-0.5 leading-tight text-slate-800 outline-none transition-[box-shadow,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 ${slotShellClass(
-                                      highlighted,
-                                      item.flight,
-                                      kePinkHighlight
-                                    )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
-                                  >
-                                    <SlotDetail item={item} compact />
-                                  </article>
-                                );
-                              })
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              <CarouselDataGrid
+                hours={hours}
+                byHourCarousel={byHourCarousel}
+                carouselGuideVisible={carouselGuideVisible}
+                onToggleGuide={toggleCarouselGuide}
+                highlightKeys={highlightKeys}
+                navigateFlashKey={navigateFlashKey}
+                kePinkHighlight={kePinkHighlight}
+                toggleHighlightKey={toggleHighlightKey}
+                variant="schedule"
+                renderCellContent={(item) => <SlotDetail item={item} compact />}
+                slotShellClassFn={slotShellClass}
+                navigateFlashShellClass={navigateFlashShellClass}
+              />
             </div>
           </div>
         </div>
       )}
+
+      {listSheetSlotItem && displayMode === "cards" ? (
+        <div
+          className={`fixed inset-0 ${Z_SHEET_BACKDROP} flex items-end justify-center bg-slate-900/45 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 sm:items-center sm:p-4`}
+          role="presentation"
+          onClick={() => setListProcessingSheetSlotKey(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="list-processing-sheet-title"
+            className={`${Z_SHEET_PANEL} relative max-h-[min(85vh,32rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:rounded-2xl`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <p id="list-processing-sheet-title" className="text-base font-bold text-slate-900">
+                수화물 처리 시간
+              </p>
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                onClick={() => setListProcessingSheetSlotKey(null)}
+              >
+                닫기
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              {formatFlightAirportLine(listSheetSlotItem)} · 적재대 {listSheetSlotItem.carousel}번
+            </p>
+            {listSheetSlotItem.note === "fixedSchedule" && !hasBaggageProcessingTimes(listSheetSlotItem) ? (
+              <p className="text-sm leading-relaxed text-slate-600">
+                고정 스케줄(막바지 시간대) 행은 공공데이터에 첫·마지막 수하물 시각이 없습니다.
+              </p>
+            ) : (
+              <div className="text-sm leading-relaxed">
+                <ProcessingSlotDetail item={listSheetSlotItem} />
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
     </section>
     </>
   );

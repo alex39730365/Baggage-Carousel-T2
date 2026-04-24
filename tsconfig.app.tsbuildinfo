@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/baggagecarouselboard.tsx","./src/hooks/usebaggagedata.ts","./src/lib/baggageapi.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/baggagecarouselboard.tsx","./src/components/carouseldatagrid.tsx","./src/hooks/usebaggagedata.ts","./src/lib/baggageapi.ts"],"version":"5.9.3"}

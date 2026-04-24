@@ -27,6 +27,11 @@ const pickString = (obj: RawBaggageItem, keys: string[]): string => {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
+    /** 공공데이터 JSON이 숫자만 줄 때(YYYYMMDDHHmm) */
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const s = String(Math.trunc(value));
+      if (s.replace(/\D/g, "").length >= 8) return s;
+    }
   }
   return "";
 };
@@ -134,6 +139,38 @@ export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number;
   }
 
   return null;
+}
+
+/** `YYYY-M-D` + 시·분 → UTC ms (한국 벽시각 +09:00 고정, DST 없음) */
+function seoulDateWallToUtcMs(dateKey: string, hh: number, mm: number): number | null {
+  const p = dateKey.split("-");
+  if (p.length !== 3) return null;
+  const y = Number(p[0]);
+  const mo = Number(p[1]);
+  const da = Number(p[2]);
+  if (![y, mo, da].every(Number.isFinite)) return null;
+  if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+  const h = ((Math.floor(hh) % 24) + 24) % 24;
+  const m = Math.max(0, Math.min(59, Math.floor(mm)));
+  const iso = `${String(y).padStart(4, "0")}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+09:00`;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * 첫·마지막 벨트 시각 문자열 사이(분). 달력이 바뀌거나 하루 이상 벌어져도 `+1440` 한 번이 아니라 실제 시각 차이로 계산.
+ */
+export function diffMinutesBaggageFirstLast(firstWallRaw: string, lastWallRaw: string): number | null {
+  const a = parseSeoulWallClock(firstWallRaw.trim());
+  const b = parseSeoulWallClock(lastWallRaw.trim());
+  if (!a || !b) return null;
+  if (a.dateKey === "unknown" || b.dateKey === "unknown") return null;
+  const ta = seoulDateWallToUtcMs(a.dateKey, a.hh, a.mm);
+  const tb = seoulDateWallToUtcMs(b.dateKey, b.hh, b.mm);
+  if (ta === null || tb === null) return null;
+  const diff = Math.round((tb - ta) / 60_000);
+  if (!Number.isFinite(diff) || diff < 0) return null;
+  return diff;
 }
 
 const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
@@ -263,6 +300,55 @@ const isArrivalLikeType = (s: BaggageSlot): boolean => {
   return t === "I" || t === "D";
 };
 
+const rawBagFirst = (raw: RawBaggageItem): string =>
+  pickString(raw, ["bagFirstTime", "bagfirstTime"]);
+const rawBagLast = (raw: RawBaggageItem): string => pickString(raw, ["bagLastTime", "baglastTime"]);
+
+const hasCompleteBaggageTimesRaw = (raw: RawBaggageItem): boolean =>
+  Boolean(rawBagFirst(raw) && rawBagLast(raw));
+
+/** YYYYMMDDHHmm — 값이 큰 쪽을 최근 스냅샷으로 간주(공공데이터 갱신 반영) */
+const baggageWallClock12 = (value: string): number => {
+  const d = value.replace(/\D/g, "");
+  if (d.length >= 12) return Number.parseInt(d.slice(0, 12), 10) || 0;
+  if (d.length >= 10) return Number.parseInt(d.slice(0, 10), 10) || 0;
+  return 0;
+};
+
+const pickRicherBagTime = (a: string, b: string): string => {
+  if (!b.trim()) return a;
+  if (!a.trim()) return b;
+  return baggageWallClock12(b) >= baggageWallClock12(a) ? b : a;
+};
+
+/**
+ * 병합·중복 제거에서 한 줄만 남길 때, 다른 줄에만 있던 수화물 처리 시각이 버리지 않게 `raw`만 합침.
+ */
+const mergeRawBaggageProcessingTimes = (base: RawBaggageItem, extra: RawBaggageItem): RawBaggageItem => {
+  const fB = rawBagFirst(base);
+  const fE = rawBagFirst(extra);
+  const lB = rawBagLast(base);
+  const lE = rawBagLast(extra);
+  const f = pickRicherBagTime(fB, fE);
+  const l = pickRicherBagTime(lB, lE);
+  if (!f && !l) return base;
+  const out: RawBaggageItem = { ...base };
+  if (f) {
+    out.bagFirstTime = f;
+    out.bagfirstTime = f;
+  }
+  if (l) {
+    out.bagLastTime = l;
+    out.baglastTime = l;
+  }
+  return out;
+};
+
+const withMergedRawBaggageTimes = (winner: BaggageSlot, loser: BaggageSlot): BaggageSlot => ({
+  ...winner,
+  raw: mergeRawBaggageProcessingTimes(winner.raw, loser.raw),
+});
+
 /** tie-break: API·실데이터 우선, 그다음 예정 길이 */
 const duplicateFlightPickScore = (s: BaggageSlot): number => {
   const t = (s.typeOfFlight ?? "").trim().toUpperCase();
@@ -271,6 +357,9 @@ const duplicateFlightPickScore = (s: BaggageSlot): number => {
   else if (t) n += 250;
   if (s.note !== "fixedSchedule") n += 500;
   if (s.status !== "fixed") n += 200;
+  /** 같은 편명으로 한 줄로 묶일 때 처리 시각이 있는 행을 선호(완전·부분) */
+  if (hasCompleteBaggageTimesRaw(s.raw)) n += 150;
+  else if (rawBagFirst(s.raw) || rawBagLast(s.raw)) n += 45;
   n += Math.min((s.estimatedTime ?? "").length, 150);
   return n;
 };
@@ -312,6 +401,9 @@ export function collapseDuplicateFlightsPreferClassified(slots: BaggageSlot[]): 
       continue;
     }
     let w = pickSingleSlotFromDuplicateGroup(g);
+    for (const s of g) {
+      if (s !== w) w = withMergedRawBaggageTimes(w, s);
+    }
     const d = resolveGroupDate(g);
     if (d && w.date !== d) w = { ...w, date: d };
     out.push(w);
@@ -347,28 +439,39 @@ const preferFixedOverApiMidnightRow = (fixed: BaggageSlot, api: BaggageSlot): Ba
 };
 
 const pickRicherSlot = (a: BaggageSlot, b: BaggageSlot): BaggageSlot => {
+  let winner: BaggageSlot;
   const aAr = isArrivalLikeType(a);
   const bAr = isArrivalLikeType(b);
-  if (aAr && !bAr) return a;
-  if (!aAr && bAr) return b;
-
-  const midA = preferFixedOverApiMidnightRow(a, b);
-  if (midA) return midA;
-  const midB = preferFixedOverApiMidnightRow(b, a);
-  if (midB) return midB;
-
-  const score = (s: BaggageSlot) => {
-    let n = 0;
-    if ((s.typeOfFlight ?? "").trim()) n += 4;
-    if (s.note !== "fixedSchedule" && s.status !== "fixed") n += 2;
-    n += Math.min(s.estimatedTime?.length ?? 0, 120) * 0.01;
-    return n;
-  };
-  const d = score(b) - score(a);
-  if (d !== 0) return d > 0 ? b : a;
-  const lenDiff = (b.flight?.length ?? 0) - (a.flight?.length ?? 0);
-  if (lenDiff !== 0) return lenDiff > 0 ? b : a;
-  return (b.estimatedTime?.length ?? 0) >= (a.estimatedTime?.length ?? 0) ? b : a;
+  if (aAr && !bAr) winner = a;
+  else if (!aAr && bAr) winner = b;
+  else {
+    const midA = preferFixedOverApiMidnightRow(a, b);
+    if (midA) winner = midA;
+    else {
+      const midB = preferFixedOverApiMidnightRow(b, a);
+      if (midB) winner = midB;
+      else {
+        const score = (s: BaggageSlot) => {
+          let n = 0;
+          if ((s.typeOfFlight ?? "").trim()) n += 4;
+          if (s.note !== "fixedSchedule" && s.status !== "fixed") n += 2;
+          if (hasCompleteBaggageTimesRaw(s.raw)) n += 3;
+          else if (rawBagFirst(s.raw) || rawBagLast(s.raw)) n += 1;
+          n += Math.min(s.estimatedTime?.length ?? 0, 120) * 0.01;
+          return n;
+        };
+        const d = score(b) - score(a);
+        if (d !== 0) winner = d > 0 ? b : a;
+        else {
+          const lenDiff = (b.flight?.length ?? 0) - (a.flight?.length ?? 0);
+          if (lenDiff !== 0) winner = lenDiff > 0 ? b : a;
+          else winner = (b.estimatedTime?.length ?? 0) >= (a.estimatedTime?.length ?? 0) ? b : a;
+        }
+      }
+    }
+  }
+  const loser = winner === a ? b : a;
+  return withMergedRawBaggageTimes(winner, loser);
 };
 
 export function dedupeBaggageSlots(slots: BaggageSlot[]): BaggageSlot[] {
