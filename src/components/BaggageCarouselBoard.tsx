@@ -1247,7 +1247,8 @@ export default function BaggageCarouselBoard() {
         </div>
       ) : null}
       <p className="pt-1 text-center text-[10px] text-slate-400 sm:text-xs">
-        본 서비스는 인천국제공항공사의 실시간 API를 활용하여 제작되었습니다.
+        인천국제공항공사 공공데이터 | 본 서비스는 비공식 개인 프로젝트이며, 제공되는 정보는 실제
+        공항 상황과 차이가 있을 수 있으므로 참고용으로만 활용해 주시기 바랍니다.
       </p>
     </section>
     </>
