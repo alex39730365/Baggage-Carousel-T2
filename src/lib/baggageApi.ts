@@ -1,10 +1,5 @@
 import { BaggageSlot, RawBaggageItem } from "../types";
 
-const SEARCH_DAYS = [0, 1, 2] as const;
-const ROWS_PER_PAGE = 1000;
-/** 공공데이터가 하루 1000건을 넘으면 뒤쪽(늦은 시간대)이 잘릴 수 있어 페이지 순회 */
-const MAX_PAGE_PER_DAY = 15;
-
 /** `BX165 / NRT / NRT` 등 연속 동일 토큰 제거 — 표시·검색·중복 키 정리 */
 export function sanitizeFlightDisplay(flight: string): string {
   const parts = flight
@@ -179,6 +174,26 @@ const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
   return { dateKey: w.dateKey, hour: `${String(w.hh).padStart(2, "0")}:00` };
 };
 
+/**
+ * 날짜 버킷은 예정(schedule) 날짜를 우선 신뢰.
+ * 일부 API 응답에서 estimatedDatetime의 날짜가 실제 운항일과 어긋나는 경우가 있어
+ * `24일/25일` 같은 날짜 탭이 사라지는 문제를 막는다.
+ */
+const pickBucketTimeWithStableDate = (scheduleTime: string, estimatedOnly: string): string => {
+  const s = scheduleTime.trim();
+  const e = estimatedOnly.trim();
+  if (!s && !e) return "";
+  if (!e) return s;
+  if (!s) return e;
+
+  const sw = parseSeoulWallClock(s);
+  const ew = parseSeoulWallClock(e);
+  if (sw?.dateKey && sw.dateKey !== "unknown") {
+    if (!ew || ew.dateKey === "unknown" || ew.dateKey !== sw.dateKey) return s;
+  }
+  return e;
+};
+
 const parseCarouselNumbers = (item: RawBaggageItem): number[] => {
   const texts = [
     pickString(item, [
@@ -213,7 +228,7 @@ const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
   /** 격자 날짜·시간 행: 화면에 보이는 표시 시각(displayTime) 기준으로 맞춘다. */
   const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime", "std"]);
   const displayTime = estimatedOnly.trim() || scheduleTime.trim();
-  const bucketTime = displayTime || scheduleTime.trim() || estimatedOnly.trim();
+  const bucketTime = pickBucketTimeWithStableDate(scheduleTime, estimatedOnly) || displayTime;
   const { dateKey, hour } = bucketDateHour(bucketTime);
   const status = pickString(item, [
     "lateral1Status",
@@ -268,7 +283,7 @@ export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
   const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime", "std"]).trim();
   const estimatedOnly = pickString(slot.raw, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]).trim();
   const displayTime = slot.estimatedTime.trim() || estimatedOnly || scheduleTime;
-  const bucketTime = displayTime || estimatedOnly || scheduleTime;
+  const bucketTime = pickBucketTimeWithStableDate(scheduleTime, estimatedOnly) || displayTime;
   if (!bucketTime.trim()) return slot;
   const w = parseSeoulWallClock(bucketTime);
   if (!w) return slot;
@@ -512,63 +527,101 @@ const extractItemsArray = (json: unknown): unknown[] => {
   return [];
 };
 
+const extractTotalCount = (json: unknown): number => {
+  const raw = (json as { response?: { body?: { totalCount?: unknown } } })?.response?.body?.totalCount;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+};
+
+const DEV_SEARCH_DAYS = [0, 1, 2] as const;
+const DEV_ROWS_PER_PAGE = 1000;
+const DEV_MAX_PAGE_PER_DAY = 15;
+
 export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
   const allSlots: BaggageSlot[] = [];
   let lastError = "";
-  let anyOk = false;
-
-  for (const searchDay of SEARCH_DAYS) {
-    for (let pageNo = 1; pageNo <= MAX_PAGE_PER_DAY; pageNo++) {
-      const url = `/api/baggage-arrivals?numOfRows=${ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}&type=json`;
-      try {
-        const res = await fetch(url, { method: "GET" });
-        if (!res.ok) {
-          let detail = "";
-          try {
-            const text = await res.text();
-            if (text.trim()) {
-              try {
-                const parsed = JSON.parse(text) as {
-                  message?: string;
-                  response?: { header?: { resultMsg?: string } };
-                };
-                detail =
-                  parsed.message?.trim() ??
-                  parsed.response?.header?.resultMsg?.trim() ??
-                  text.trim().slice(0, 120);
-              } catch {
-                detail = text.trim().slice(0, 120);
-              }
-            }
-          } catch {
-            // ignore body read failure
-          }
-          if (res.status === 429) {
-            lastError = "API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.";
-          } else if (res.status === 503) {
-            lastError = detail
-              ? `API 요청 실패 (503): ${detail}`
-              : "API 요청 실패 (503): 서버 설정 문제일 수 있습니다. DATA_GO_KR_SERVICE_KEY를 확인해 주세요.";
-          } else if (pageNo === 1) {
-            lastError = detail
-              ? `API 요청 실패 (${res.status}): ${detail}`
-              : `API 요청 실패 (${res.status})`;
-          }
-          break;
-        }
-        anyOk = true;
-        const json = await res.json();
-        const items = extractItemsArray(json);
-        allSlots.push(...items.flatMap((item) => normalizeItem(item as RawBaggageItem)));
-        if (items.length < ROWS_PER_PAGE) break;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : "요청 실패";
-        break;
-      }
+  const parseErrorDetail = (text: string): string => {
+    if (!text.trim()) return "";
+    try {
+      const parsed = JSON.parse(text) as {
+        message?: string;
+        response?: { header?: { resultMsg?: string } };
+      };
+      return parsed.message?.trim() ?? parsed.response?.header?.resultMsg?.trim() ?? text.trim().slice(0, 120);
+    } catch {
+      return text.trim().slice(0, 120);
     }
-  }
+  };
 
-  if (!anyOk) throw new Error(lastError || "API 요청 실패");
+  const url = `/api/baggage-arrivals?type=json`;
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const text = await res.text();
+        if (text.trim()) {
+          try {
+            const parsed = JSON.parse(text) as {
+              message?: string;
+              response?: { header?: { resultMsg?: string } };
+            };
+            detail =
+              parsed.message?.trim() ??
+              parsed.response?.header?.resultMsg?.trim() ??
+              text.trim().slice(0, 120);
+          } catch {
+            detail = text.trim().slice(0, 120);
+          }
+        }
+      } catch {
+        // ignore body read failure
+      }
+      if (res.status === 429) {
+        lastError = "API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.";
+      } else if (res.status === 503) {
+        lastError = detail
+          ? `API 요청 실패 (503): ${detail}`
+          : "API 요청 실패 (503): 서버 설정 문제일 수 있습니다. DATA_GO_KR_SERVICE_KEY를 확인해 주세요.";
+      } else {
+        lastError = detail ? `API 요청 실패 (${res.status}): ${detail}` : `API 요청 실패 (${res.status})`;
+      }
+      throw new Error(lastError || "API 요청 실패");
+    }
+    const json = await res.json();
+    let items = extractItemsArray(json);
+    const totalCount = extractTotalCount(json);
+
+    // dev 프록시가 서버 스냅샷 대신 원본 1페이지만 줄 때(24일만 보이는 문제) 보강 수집.
+    const needsFallbackFanout = totalCount > items.length && items.length <= DEV_ROWS_PER_PAGE;
+    if (needsFallbackFanout) {
+      const fanoutItems: unknown[] = [];
+      for (const searchDay of DEV_SEARCH_DAYS) {
+        for (let pageNo = 1; pageNo <= DEV_MAX_PAGE_PER_DAY; pageNo++) {
+          const pageUrl = `/api/baggage-arrivals?type=json&numOfRows=${DEV_ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}`;
+          const pageRes = await fetch(pageUrl, { method: "GET" });
+          if (!pageRes.ok) {
+            const t = await pageRes.text();
+            const detail = parseErrorDetail(t);
+            if (pageRes.status === 429) {
+              throw new Error("API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.");
+            }
+            throw new Error(detail || `API 요청 실패 (${pageRes.status})`);
+          }
+          const pageJson = await pageRes.json();
+          const pageItems = extractItemsArray(pageJson);
+          fanoutItems.push(...pageItems);
+          if (pageItems.length < DEV_ROWS_PER_PAGE) break;
+        }
+      }
+      items = fanoutItems;
+    }
+
+    allSlots.push(...items.flatMap((item) => normalizeItem(item as RawBaggageItem)));
+  } catch (err) {
+    if (!lastError) lastError = err instanceof Error ? err.message : "요청 실패";
+    throw new Error(lastError || "API 요청 실패");
+  }
   /** 날짜가 섞인 채로 편당 병합하면 다른 날 항공편이 한 줄로 합쳐짐 → 날짜별로 나눔 */
   const byDate = new Map<string, BaggageSlot[]>();
   for (const s of allSlots) {
