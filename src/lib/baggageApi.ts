@@ -523,10 +523,36 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       try {
         const res = await fetch(url, { method: "GET" });
         if (!res.ok) {
+          let detail = "";
+          try {
+            const text = await res.text();
+            if (text.trim()) {
+              try {
+                const parsed = JSON.parse(text) as {
+                  message?: string;
+                  response?: { header?: { resultMsg?: string } };
+                };
+                detail =
+                  parsed.message?.trim() ??
+                  parsed.response?.header?.resultMsg?.trim() ??
+                  text.trim().slice(0, 120);
+              } catch {
+                detail = text.trim().slice(0, 120);
+              }
+            }
+          } catch {
+            // ignore body read failure
+          }
           if (res.status === 429) {
             lastError = "API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.";
+          } else if (res.status === 503) {
+            lastError = detail
+              ? `API 요청 실패 (503): ${detail}`
+              : "API 요청 실패 (503): 서버 설정 문제일 수 있습니다. DATA_GO_KR_SERVICE_KEY를 확인해 주세요.";
           } else if (pageNo === 1) {
-            lastError = `API 요청 실패 (${res.status})`;
+            lastError = detail
+              ? `API 요청 실패 (${res.status}): ${detail}`
+              : `API 요청 실패 (${res.status})`;
           }
           break;
         }
