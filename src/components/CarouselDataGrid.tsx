@@ -80,6 +80,7 @@ export type CarouselDataGridProps = {
   renderCellContent: (item: BaggageSlot) => ReactNode;
   slotShellClassFn: (starHighlighted: boolean, flight: string, kePinkOn: boolean) => string;
   navigateFlashShellClass: string;
+  stickyHeader?: boolean;
 };
 
 export function CarouselDataGrid({
@@ -95,13 +96,14 @@ export function CarouselDataGrid({
   renderCellContent,
   slotShellClassFn,
   navigateFlashShellClass,
+  stickyHeader = true,
 }: CarouselDataGridProps) {
   const ariaCtx = variant === "processing" ? "수화물 처리 시간 격자" : "격자 칸 클릭";
   const keyPrefix = variant === "processing" ? "proc-" : "";
 
   return (
     <table className="w-full min-w-0 table-fixed border-collapse text-[8px] text-slate-800 sm:text-[9px] lg:text-[10px]">
-      <thead className="sticky top-0 z-20 bg-slate-50 ring-1 ring-slate-200/60">
+      <thead className={`${stickyHeader ? "sticky top-0 z-20" : ""} bg-slate-50 ring-1 ring-slate-200/60`}>
         <GridHeaderRow guideVisible={carouselGuideVisible} onToggleGuide={onToggleGuide} />
       </thead>
       <tbody>
