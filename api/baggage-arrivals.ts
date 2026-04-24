@@ -36,7 +36,8 @@ export default async function handler(req: any, res: any) {
     const response = await fetch(target, { method: "GET" });
     const text = await response.text();
 
-    res.setHeader("Cache-Control", "s-maxage=240, stale-while-revalidate=60");
+    // Vercel edge 캐시를 60초로 맞춰 다수 사용자 요청을 한 번에 흡수
+    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=30");
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(response.status).send(text);
   } catch (error) {

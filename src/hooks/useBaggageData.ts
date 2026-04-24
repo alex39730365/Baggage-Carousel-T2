@@ -11,7 +11,6 @@ import { BaggageSlot } from "../types";
 import fixedScheduleJson from "../data/fixedSchedule.json";
 
 const REFRESH_MS = 1 * 60 * 1000;
-const JITTER_MS = 20 * 1000;
 const STORAGE_KEY = "baggage-slots-by-date-v7";
 const STORAGE_META_KEY = "baggage-slots-meta-v1";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -187,13 +186,11 @@ export function useBaggageData() {
       }
 
       if (!mounted) return;
-      const jitter = Math.floor(Math.random() * JITTER_MS);
-      timerId = window.setTimeout(load, REFRESH_MS + jitter);
+      timerId = window.setTimeout(load, REFRESH_MS);
     };
 
-    // 첫 호출도 랜덤 지연을 넣어 동시 시작을 분산
-    const initialJitter = Math.floor(Math.random() * JITTER_MS);
-    timerId = window.setTimeout(load, initialJitter);
+    // 첫 호출은 즉시 실행하고 이후 1분 간격 유지
+    timerId = window.setTimeout(load, 0);
     return () => {
       mounted = false;
       if (timerId !== null) window.clearTimeout(timerId);
