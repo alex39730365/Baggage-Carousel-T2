@@ -499,7 +499,7 @@ export default function BaggageCarouselBoard() {
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
-  /** 목록: 항공편 호버 시 뜨는 수화물 처리 시간 작은 창 */
+  /** 목록: 항공편 호버 시 뜨는 수하물 처리 시간 작은 창 */
   const [listProcessingHoverPopover, setListProcessingHoverPopover] = useState(
     () => loadListProcessingHoverPopover()
   );
@@ -860,7 +860,7 @@ export default function BaggageCarouselBoard() {
                 : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             }`}
           >
-            수화물 처리 시간
+            수하물 처리 시간
           </button>
         </div>
 
@@ -947,7 +947,7 @@ export default function BaggageCarouselBoard() {
                             ? "bg-pink-50 text-slate-900 hover:bg-pink-100/90"
                             : "bg-transparent text-slate-700 hover:bg-slate-100/80"
                       }`}
-                      aria-label={`${row.flight} 목록·격자·수화물 처리 시간에서 해당 위치로 이동`}
+                      aria-label={`${row.flight} 목록·격자·수하물 처리 시간에서 해당 위치로 이동`}
                     >
                       {row.flight} — 시간{" "}
                       <span className="font-bold tabular-nums text-slate-950">{row.time}</span> — 적재대{" "}
@@ -978,8 +978,8 @@ export default function BaggageCarouselBoard() {
                 aria-pressed={listProcessingHoverPopover}
                 title={
                   listProcessingHoverPopover
-                    ? "항공편에 마우스를 올렸을 때 뜨는 수화물 처리 시간 창을 끕니다."
-                    : "수화물 처리 시간 작은 창을 다시 표시합니다."
+                    ? "항공편에 마우스를 올렸을 때 뜨는 수하물 처리 시간 창을 끕니다."
+                    : "수하물 처리 시간 작은 창을 다시 표시합니다."
                 }
                 onClick={() => {
                   setListProcessingHoverPopover((prev) => {
@@ -1073,7 +1073,7 @@ export default function BaggageCarouselBoard() {
                                       aria-live="polite"
                                     >
                                       <p className="mb-2 border-b border-slate-100 pb-1.5 text-[11px] font-bold text-slate-900">
-                                        수화물 처리 시간
+                                        수하물 처리 시간
                                       </p>
                                       <div className="text-xs leading-relaxed text-slate-800">
                                         <ProcessingSlotDetail item={item} />
@@ -1087,10 +1087,10 @@ export default function BaggageCarouselBoard() {
                                   <button
                                     type="button"
                                     className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-600 hover:bg-slate-50 active:bg-slate-100"
-                                    aria-label="수화물 처리 시간 보기"
+                                    aria-label="수하물 처리 시간 보기"
                                     title={
                                       hasBaggageProcessingTimes(item)
-                                        ? "수화물 처리 시간"
+                                        ? "수하물 처리 시간"
                                         : "처리 시간 데이터 없음"
                                     }
                                     onClick={() => setListProcessingSheetSlotKey(slotKey)}
@@ -1221,7 +1221,7 @@ export default function BaggageCarouselBoard() {
           >
             <div className="mb-3 flex items-start justify-between gap-2">
               <p id="list-processing-sheet-title" className="text-base font-bold text-slate-900">
-                수화물 처리 시간
+                수하물 처리 시간
               </p>
               <button
                 type="button"

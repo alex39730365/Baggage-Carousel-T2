@@ -337,7 +337,7 @@ const pickRicherBagTime = (a: string, b: string): string => {
 };
 
 /**
- * 병합·중복 제거에서 한 줄만 남길 때, 다른 줄에만 있던 수화물 처리 시각이 버리지 않게 `raw`만 합침.
+ * 병합·중복 제거에서 한 줄만 남길 때, 다른 줄에만 있던 수하물 처리 시각이 버리지 않게 `raw`만 합침.
  */
 const mergeRawBaggageProcessingTimes = (base: RawBaggageItem, extra: RawBaggageItem): RawBaggageItem => {
   const fB = rawBagFirst(base);

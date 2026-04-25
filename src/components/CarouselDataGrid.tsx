@@ -98,7 +98,7 @@ export function CarouselDataGrid({
   navigateFlashShellClass,
   stickyHeader = true,
 }: CarouselDataGridProps) {
-  const ariaCtx = variant === "processing" ? "수화물 처리 시간 격자" : "격자 칸 클릭";
+  const ariaCtx = variant === "processing" ? "수하물 처리 시간 격자" : "격자 칸 클릭";
   const keyPrefix = variant === "processing" ? "proc-" : "";
 
   return (
