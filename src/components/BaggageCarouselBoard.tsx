@@ -67,18 +67,18 @@ const NAVIGATE_FLASH_MS = 2000;
 const navigateFlashShellClass =
   "z-[1] bg-pink-100 ring-4 ring-pink-400 shadow-[0_0_14px_rgba(236,72,153,0.55)]";
 
-const CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY = "baggage-carousel-10-11-guide-v1";
+const CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY = "baggage-carousel-10-11-guide-v2";
 
 const loadCarouselGuideVisible = (): boolean => {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   try {
     const raw = localStorage.getItem(CAROUSEL_GUIDE_VISIBLE_STORAGE_KEY);
-    if (raw === "0") return false;
     if (raw === "1") return true;
+    if (raw === "0") return false;
   } catch {
     // ignore
   }
-  return true;
+  return false;
 };
 
 const persistCarouselGuideVisible = (visible: boolean) => {
