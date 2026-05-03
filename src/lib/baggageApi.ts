@@ -168,6 +168,74 @@ export function diffMinutesBaggageFirstLast(firstWallRaw: string, lastWallRaw: s
   return diff;
 }
 
+function slotDateToDateKey(slotDate: string): string | null {
+  const t = slotDate.trim();
+  const digits = t.replace(/\D/g, "");
+  if (digits.length >= 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  }
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
+}
+
+/**
+ * 도착(ATA)부터 마지막 수하물(L)까지 경과(분). 첫 수하물(F)은 소요 계산에 사용하지 않음.
+ * 도착 시각에 날짜가 없으면 L의 날짜 또는 `slotDate`로 맞춘다.
+ */
+export function diffMinutesArrivalToLastBaggage(
+  arrivalRaw: string,
+  lastBagRaw: string,
+  slotDate: string
+): number | null {
+  const lastTrim = lastBagRaw.trim();
+  if (!lastTrim) return null;
+  const lastW = parseSeoulWallClock(lastTrim);
+  if (!lastW) return null;
+
+  const arrTrim = arrivalRaw.trim();
+  if (!arrTrim) return null;
+  const arrW = parseSeoulWallClock(arrTrim);
+  if (arrW && arrW.dateKey !== "unknown") {
+    return diffMinutesBaggageFirstLast(arrTrim, lastTrim);
+  }
+
+  const hm = arrTrim.match(/(\d{1,2}):(\d{2})/);
+  if (!hm) return null;
+  let hh = Number(hm[1]);
+  let mm = Number(hm[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  hh = ((Math.floor(hh) % 24) + 24) % 24;
+  mm = Math.max(0, Math.min(59, Math.floor(mm)));
+
+  const dateKey =
+    lastW.dateKey !== "unknown" ? lastW.dateKey : slotDateToDateKey(slotDate);
+  if (!dateKey) return null;
+  const p = dateKey.split("-");
+  if (p.length !== 3) return null;
+  const ymdCompact = `${p[0]}${p[1]}${p[2]}`;
+  const arrivalSynthetic = `${ymdCompact}${String(hh).padStart(2, "0")}${String(mm).padStart(2, "0")}`;
+  return diffMinutesBaggageFirstLast(arrivalSynthetic, lastTrim);
+}
+
+/** 마지막 수하물(L) 시각을 UTC ms로. 없거나 파싱 불가면 null. */
+export function getBagLastTimeUtcMs(slot: BaggageSlot): number | null {
+  const t = pickString(slot.raw, ["bagLastTime", "baglastTime"]).trim();
+  if (!t) return null;
+  const w = parseSeoulWallClock(t);
+  if (!w) return null;
+  const dateKey = w.dateKey !== "unknown" ? w.dateKey : slotDateToDateKey(slot.date);
+  if (!dateKey) return null;
+  return seoulDateWallToUtcMs(dateKey, w.hh, w.mm);
+}
+
+/** `nowMs`가 L 시각 이상이면 true (L 데이터가 있을 때만). */
+export function isBagLastTimePassed(slot: BaggageSlot, nowMs: number): boolean {
+  const ms = getBagLastTimeUtcMs(slot);
+  if (ms === null) return false;
+  return nowMs >= ms;
+}
+
 const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
   const w = parseSeoulWallClock(raw);
   if (!w) return { dateKey: "unknown", hour: "00:00" };
@@ -554,8 +622,10 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
   };
 
   const url = `/api/baggage-arrivals?type=json`;
+  /** Cache-Control(max-age)를 따르면 동일 탭·짧은 간격 재요청 시 브라우저/에지 캐시 활용 */
+  const fetchInit: RequestInit = { method: "GET", cache: "default" };
   try {
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetch(url, fetchInit);
     if (!res.ok) {
       let detail = "";
       try {
@@ -599,7 +669,7 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       for (const searchDay of DEV_SEARCH_DAYS) {
         for (let pageNo = 1; pageNo <= DEV_MAX_PAGE_PER_DAY; pageNo++) {
           const pageUrl = `/api/baggage-arrivals?type=json&numOfRows=${DEV_ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}`;
-          const pageRes = await fetch(pageUrl, { method: "GET" });
+          const pageRes = await fetch(pageUrl, fetchInit);
           if (!pageRes.ok) {
             const t = await pageRes.text();
             const detail = parseErrorDetail(t);

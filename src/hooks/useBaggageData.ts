@@ -10,6 +10,7 @@ import {
 import { BaggageSlot } from "../types";
 import fixedScheduleJson from "../data/fixedSchedule.json";
 
+/** `api/baggage-arrivals` UPSTREAM_CACHE_TTL_MS(60s)와 동일 — 1분 갱신 */
 const REFRESH_MS = 1 * 60 * 1000;
 const STORAGE_KEY = "baggage-slots-by-date-v7";
 const STORAGE_META_KEY = "baggage-slots-meta-v1";
