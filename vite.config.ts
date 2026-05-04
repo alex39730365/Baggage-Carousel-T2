@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const fromEnv = (env.VITE_DATA_GO_KR_SERVICE_KEY ?? "").trim();
   const serviceKey = fromEnv || (mode === "development" ? DEV_FALLBACK_SERVICE_KEY : "");
+  const devProxyTarget = (env.VITE_DEV_BAGGAGE_PROXY_TARGET ?? "https://apis.data.go.kr").trim();
+  const devProxyPath =
+    (env.VITE_DEV_BAGGAGE_PROXY_PATH ?? "/B551177/statusOfBaggageClaimDesk/getFltArrivalsBaggageClaimDesk").trim() ||
+    "/B551177/statusOfBaggageClaimDesk/getFltArrivalsBaggageClaimDesk";
 
   return {
     plugins: [react()],
@@ -17,14 +21,11 @@ export default defineConfig(({ mode }) => {
       host: true,
       proxy: {
         "/api/baggage-arrivals": {
-          target: "https://apis.data.go.kr",
+          target: devProxyTarget,
           changeOrigin: true,
           secure: true,
           rewrite: (path) => {
-            const rewritten = path.replace(
-              /^\/api\/baggage-arrivals/,
-              "/B551177/statusOfBaggageClaimDesk/getFltArrivalsBaggageClaimDesk"
-            );
+            const rewritten = path.replace(/^\/api\/baggage-arrivals/, devProxyPath);
             if (rewritten.indexOf("serviceKey=") >= 0) return rewritten;
             const connector = rewritten.indexOf("?") >= 0 ? "&" : "?";
             if (!serviceKey) {

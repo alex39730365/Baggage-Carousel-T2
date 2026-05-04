@@ -558,7 +558,7 @@ const SlotDetail = ({
 };
 
 export default function BaggageCarouselBoard() {
-  const { hours, loading, error, lastUpdated, slots, slotsByDate, selectedDate, setSelectedDate } =
+  const { hours, loading, error, refreshError, lastUpdated, slots, slotsByDate, selectedDate, setSelectedDate } =
     useBaggageData();
   const [keyword, setKeyword] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("terminal2");
@@ -1015,6 +1015,11 @@ export default function BaggageCarouselBoard() {
           <p className="text-left text-sm font-medium text-[#1e40af]">데이터를 불러오는 중...</p>
         )}
         {error && <p className="text-left text-sm font-medium text-red-600">오류: {error}</p>}
+        {refreshError && (
+          <p className="text-left text-sm font-medium text-amber-800">
+            갱신 실패(이전 데이터 표시): {refreshError}
+          </p>
+        )}
       </header>
 
       {displayMode === "cards" ? (

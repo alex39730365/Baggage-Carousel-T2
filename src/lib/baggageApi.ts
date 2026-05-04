@@ -605,6 +605,21 @@ const DEV_SEARCH_DAYS = [0, 1, 2] as const;
 const DEV_ROWS_PER_PAGE = 1000;
 const DEV_MAX_PAGE_PER_DAY = 15;
 
+/**
+ * 기본: 동일 출처 `/api/baggage-arrivals`.
+ * 정적 사이트 + 별도 API 게이트웨이 시 빌드 전 `VITE_BAGGAGE_ARRIVALS_URL`에 전체 URL 설정 (슬래시 없이 끝나도 됨).
+ */
+export function getBaggageArrivalsBaseUrl(): string {
+  const v = (import.meta.env.VITE_BAGGAGE_ARRIVALS_URL ?? "").trim().replace(/\/$/, "");
+  return v || "/api/baggage-arrivals";
+}
+
+function baggageArrivalsRequestUrl(searchParams: string): string {
+  const base = getBaggageArrivalsBaseUrl();
+  const q = searchParams.startsWith("?") ? searchParams : `?${searchParams}`;
+  return `${base}${q}`;
+}
+
 export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
   const allSlots: BaggageSlot[] = [];
   let lastError = "";
@@ -621,9 +636,9 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
     }
   };
 
-  const url = `/api/baggage-arrivals?type=json`;
-  /** Cache-Control(max-age)를 따르면 동일 탭·짧은 간격 재요청 시 브라우저/에지 캐시 활용 */
-  const fetchInit: RequestInit = { method: "GET", cache: "default" };
+  const url = baggageArrivalsRequestUrl("type=json");
+  /** 1분 폴링 시 CDN·브라우저 캐시로 인한 이전 응답 고착 방지 */
+  const fetchInit: RequestInit = { method: "GET", cache: "no-store" };
   try {
     const res = await fetch(url, fetchInit);
     if (!res.ok) {
@@ -652,7 +667,7 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       } else if (res.status === 503) {
         lastError = detail
           ? `API 요청 실패 (503): ${detail}`
-          : "API 요청 실패 (503): 서버 설정 문제일 수 있습니다. DATA_GO_KR_SERVICE_KEY를 확인해 주세요.";
+          : "API 요청 실패 (503): 서버 설정 문제일 수 있습니다. API 키·업스트림 설정(INTEGRATION.md)을 확인해 주세요.";
       } else {
         lastError = detail ? `API 요청 실패 (${res.status}): ${detail}` : `API 요청 실패 (${res.status})`;
       }
@@ -668,7 +683,9 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       const fanoutItems: unknown[] = [];
       for (const searchDay of DEV_SEARCH_DAYS) {
         for (let pageNo = 1; pageNo <= DEV_MAX_PAGE_PER_DAY; pageNo++) {
-          const pageUrl = `/api/baggage-arrivals?type=json&numOfRows=${DEV_ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}`;
+          const pageUrl = baggageArrivalsRequestUrl(
+            `type=json&numOfRows=${DEV_ROWS_PER_PAGE}&pageNo=${pageNo}&searchDay=${searchDay}`
+          );
           const pageRes = await fetch(pageUrl, fetchInit);
           if (!pageRes.ok) {
             const t = await pageRes.text();

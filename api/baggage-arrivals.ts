@@ -1,7 +1,32 @@
 import { createClient } from "@vercel/kv";
 
-const OPEN_API_URL =
+/** 공공데이터 포털 기본 엔드포인트 — `BAGGAGE_DATA_UPSTREAM_URL`로 교체 가능 */
+const DEFAULT_PAGINATED_UPSTREAM_BASE =
   "https://apis.data.go.kr/B551177/statusOfBaggageClaimDesk/getFltArrivalsBaggageClaimDesk";
+
+function processEnv(): Record<string, string | undefined> {
+  return ((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ??
+    {}) as Record<string, string | undefined>;
+}
+
+function paginatedUpstreamBase(): string {
+  const e = processEnv();
+  const u = String(e.BAGGAGE_DATA_UPSTREAM_URL ?? e.DATA_GO_KR_UPSTREAM_URL ?? "").trim();
+  return u || DEFAULT_PAGINATED_UPSTREAM_BASE;
+}
+
+function snapshotUpstreamUrl(): string {
+  return String(processEnv().BAGGAGE_UPSTREAM_SNAPSHOT_URL ?? "").trim();
+}
+
+function useSnapshotUpstream(): boolean {
+  return Boolean(snapshotUpstreamUrl());
+}
+
+function shouldAppendPaginatedServiceKey(): boolean {
+  const v = String(processEnv().BAGGAGE_PAGINATED_APPEND_SERVICE_KEY ?? "true").toLowerCase();
+  return v !== "false" && v !== "0" && v !== "no";
+}
 
 /** .env 미설정 시에도 데모 키로 동작해 503(키 누락) 방지 */
 const DEV_FALLBACK_SERVICE_KEY =
@@ -15,9 +40,15 @@ const UPSTREAM_CACHE_TTL_MS = 60 * 1000;
 
 const SNAPSHOT_KV_KEY = "baggage:snapshot-v3";
 const SNAPSHOT_LOCK_KEY = "baggage:snapshot-lock-v3";
-/** Redis 키 TTL(초) — 논리 TTL(60s)보다 약간 길게 */
-const SNAPSHOT_KV_TTL_SEC = 90;
+/**
+ * Redis 키 TTL(초) — 물리 보관은 길게(업스트림 실패 시 STALE 폴백용).
+ * 논리상 "신선" 여부는 tryReadKvSnapshot의 UPSTREAM_CACHE_TTL_MS로만 판단.
+ */
+const SNAPSHOT_KV_TTL_SEC = 15 * 60;
 const LOCK_TTL_SEC = 50;
+
+/** 업스트림 오류 시에도 응답 가능한 최대 스냅샷 나이 */
+const STALE_FALLBACK_MAX_MS = 15 * 60 * 1000;
 
 /**
  * 브라우저·CDN이 동일 JSON을 재사용.
@@ -86,6 +117,25 @@ async function writeKvSnapshot(kv: NonNullable<ReturnType<typeof getKvClient>>, 
   }
 }
 
+async function getStaleFallbackPayload(
+  kv: ReturnType<typeof getKvClient>,
+  cacheKey: string
+): Promise<CachedPayload | null> {
+  const mem = responseCache.get(cacheKey);
+  if (mem && mem.status === 200 && Date.now() - mem.createdAt < STALE_FALLBACK_MAX_MS) return mem;
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(SNAPSHOT_KV_KEY);
+    if (typeof raw !== "string" || !raw) return null;
+    const parsed = JSON.parse(raw) as CachedPayload;
+    if (!parsed?.body || typeof parsed.createdAt !== "number" || parsed.status !== 200) return null;
+    if (Date.now() - parsed.createdAt >= STALE_FALLBACK_MAX_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 const extractItems = (json: any): any[] => {
   const itemsNode = json?.response?.body?.items;
   if (Array.isArray(itemsNode)) return itemsNode;
@@ -111,35 +161,96 @@ const buildSnapshotResponse = (items: any[]) => ({
   },
 });
 
-async function fetchUpstreamPayload(serviceKey: string): Promise<CachedPayload> {
-  const merged: any[] = [];
+async function fetchOnePage(
+  serviceKey: string,
+  searchDay: (typeof SEARCH_DAYS)[number],
+  pageNo: number
+): Promise<{ items: any[]; totalCount: number }> {
+  const query = new URLSearchParams();
+  if (shouldAppendPaginatedServiceKey()) query.set("serviceKey", serviceKey);
+  query.set("type", "json");
+  query.set("numOfRows", String(ROWS_PER_PAGE));
+  query.set("pageNo", String(pageNo));
+  query.set("searchDay", String(searchDay));
+  const target = `${paginatedUpstreamBase()}?${query.toString()}`;
 
-  for (const searchDay of SEARCH_DAYS) {
-    let plannedPages = 1;
-    for (let pageNo = 1; pageNo <= plannedPages && pageNo <= MAX_PAGE_PER_DAY; pageNo++) {
-      const query = new URLSearchParams();
-      query.set("serviceKey", serviceKey);
-      query.set("type", "json");
-      query.set("numOfRows", String(ROWS_PER_PAGE));
-      query.set("pageNo", String(pageNo));
-      query.set("searchDay", String(searchDay));
-      const target = `${OPEN_API_URL}?${query.toString()}`;
-
-      const response = await fetch(target, { method: "GET" });
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(`Upstream failed (${response.status})`);
-      }
-      const json = JSON.parse(text);
-      const items = extractItems(json);
-      if (pageNo === 1) {
-        const totalCount = extractTotalCount(json);
-        plannedPages = Math.max(1, Math.min(MAX_PAGE_PER_DAY, Math.ceil(totalCount / ROWS_PER_PAGE)));
-      }
-      merged.push(...items);
-      if (items.length < ROWS_PER_PAGE) break;
-    }
+  const response = await fetch(target, { method: "GET" });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Upstream failed (${response.status})`);
   }
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Upstream non-JSON: ${text.trim().slice(0, 120)}`);
+  }
+  const items = extractItems(json);
+  const totalCount = pageNo === 1 ? extractTotalCount(json) : 0;
+  return { items, totalCount };
+}
+
+async function fetchUpstreamFromSnapshot(): Promise<CachedPayload> {
+  const env = processEnv();
+  const url = snapshotUpstreamUrl();
+  const auth = String(env.BAGGAGE_UPSTREAM_AUTHORIZATION ?? "").trim();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (auth) headers.Authorization = auth;
+
+  const response = await fetch(url, { method: "GET", headers });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Snapshot upstream failed (${response.status})`);
+  }
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Snapshot upstream non-JSON: ${text.trim().slice(0, 120)}`);
+  }
+
+  const hasGovShape =
+    json?.response?.body &&
+    (Array.isArray(json.response.body.items) || Array.isArray(json.response.body.items?.item));
+
+  let body: string;
+  if (hasGovShape) {
+    body = JSON.stringify(json);
+  } else {
+    const items = extractItems(json);
+    const list = items.length > 0 ? items : Array.isArray(json) ? json : [];
+    if (!list.length) {
+      throw new Error("Snapshot upstream: empty or unrecognized JSON (expected items or 공공데이터 response shape)");
+    }
+    body = JSON.stringify(buildSnapshotResponse(list));
+  }
+
+  return {
+    status: 200,
+    body,
+    contentType: "application/json; charset=utf-8",
+    createdAt: Date.now(),
+  };
+}
+
+async function fetchUpstreamPayload(serviceKey: string): Promise<CachedPayload> {
+  const perDay = await Promise.all(
+    SEARCH_DAYS.map(async (searchDay) => {
+      const merged: any[] = [];
+      const first = await fetchOnePage(serviceKey, searchDay, 1);
+      merged.push(...first.items);
+      const totalCount = first.totalCount;
+      const plannedPages = Math.max(1, Math.min(MAX_PAGE_PER_DAY, Math.ceil(totalCount / ROWS_PER_PAGE)));
+      if (plannedPages > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: plannedPages - 1 }, (_, i) => fetchOnePage(serviceKey, searchDay, i + 2))
+        );
+        for (const r of rest) merged.push(...r.items);
+      }
+      return merged;
+    })
+  );
+  const merged = perDay.flat();
 
   const body = JSON.stringify(buildSnapshotResponse(merged));
   return {
@@ -162,19 +273,36 @@ function sendPayload(
   res.status(payload.status).send(payload.body);
 }
 
+function applyCors(res: any) {
+  const origin = String(processEnv().BAGGAGE_API_CORS_ORIGIN ?? "").trim();
+  if (!origin) return;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 export default async function handler(req: any, res: any) {
+  applyCors(res);
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== "GET") {
     res.status(405).json({ message: "Method not allowed" });
     return;
   }
 
-  const fromEnv = String((globalThis as any)?.process?.env?.DATA_GO_KR_SERVICE_KEY ?? "").trim();
+  const snapshotMode = useSnapshotUpstream();
+  const fromEnv = String(processEnv().DATA_GO_KR_SERVICE_KEY ?? "").trim();
   const serviceKey = fromEnv || DEV_FALLBACK_SERVICE_KEY;
 
-  if (!serviceKey) {
+  if (!snapshotMode && !serviceKey) {
     res.status(503).json({
       message:
-        "DATA_GO_KR_SERVICE_KEY가 설정되지 않았습니다. Vercel Production 프로젝트 환경 변수에 공공데이터 서비스키를 추가해 주세요.",
+        "DATA_GO_KR_SERVICE_KEY가 설정되지 않았습니다. Vercel Production 프로젝트 환경 변수에 공공데이터 서비스키를 추가하거나, 사내 API용 BAGGAGE_UPSTREAM_SNAPSHOT_URL을 설정해 주세요.",
     });
     return;
   }
@@ -225,7 +353,9 @@ export default async function handler(req: any, res: any) {
   }
 
   const runUpstream = async (): Promise<CachedPayload> => {
-    const payload = await fetchUpstreamPayload(serviceKey);
+    const payload = snapshotMode
+      ? await fetchUpstreamFromSnapshot()
+      : await fetchUpstreamPayload(serviceKey);
     responseCache.set(cacheKey, payload);
     if (kv) await writeKvSnapshot(kv, payload);
     return payload;
@@ -242,6 +372,12 @@ export default async function handler(req: any, res: any) {
     sendPayload(res, payload, pending ? "JOIN" : "MISS");
   } catch (error) {
     inflightRequests.delete(cacheKey);
+    const stale = await getStaleFallbackPayload(kv, cacheKey);
+    if (stale) {
+      responseCache.set(cacheKey, stale);
+      sendPayload(res, stale, "STALE-FALLBACK");
+      return;
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: `Upstream request failed: ${message}` });
   } finally {

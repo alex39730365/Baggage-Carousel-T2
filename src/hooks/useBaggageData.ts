@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildHourRows,
   compareSlotsByEstimatedArrival,
@@ -115,7 +115,10 @@ export function useBaggageData() {
   const [slotsByDate, setSlotsByDate] = useState<Record<string, BaggageSlot[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  /** 이전 갱신 성공 이후 네트워크만 실패했을 때(표시 데이터는 유지) */
+  const [refreshError, setRefreshError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const fetchSucceededRef = useRef(false);
   const [selectedDate, setSelectedDate] = useState(() => preferredDateKey(fixedSlotsByDate));
   const [userSelectedDate, setUserSelectedDate] = useState(false);
 
@@ -142,6 +145,7 @@ export function useBaggageData() {
         }
         const merged = pruneEmptyDates(rebuildFromFixedAndGrouped(livePruned));
         setSlotsByDate(merged);
+        if (Object.keys(merged).length > 0) fetchSucceededRef.current = true;
       }
     } catch {
       // ignore cache parse errors
@@ -177,11 +181,19 @@ export function useBaggageData() {
           return merged;
         });
         setError("");
+        setRefreshError("");
+        fetchSucceededRef.current = true;
         setLastUpdated(new Date());
       } catch (err) {
         if (!mounted) return;
         const message = err instanceof Error ? err.message : "알 수 없는 오류";
-        setError(message);
+        if (fetchSucceededRef.current) {
+          setRefreshError(message);
+          setError("");
+        } else {
+          setError(message);
+          setRefreshError("");
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -243,6 +255,7 @@ export function useBaggageData() {
     setSelectedDate: handleSelectDate,
     loading,
     error,
+    refreshError,
     lastUpdated,
     hours: buildHourRows(),
     byHourCarousel,

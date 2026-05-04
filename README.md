@@ -16,7 +16,7 @@
 
 - API 호출 URL: 공항 수하물 캐러셀 API
 - 초기 렌더 시 1회 호출
-- 이후 `5분` 간격 자동 재호출
+- 이후 약 `1분` 간격 자동 재호출(클라이언트 `REFRESH_MS`·서버 `UPSTREAM_CACHE_TTL_MS`와 동일)
 - 응답 `item[]` 데이터를 시간(`HH:00`) + 캐러셀 번호(1~19)로 매핑해 표 렌더
 
 ## 프로젝트에 붙이는 방법
@@ -38,6 +38,7 @@
 
 ## 참고
 
+- **다른 호스팅·사내 API·CORS·스냅샷 URL** 은 [INTEGRATION.md](./INTEGRATION.md) 참고.
 - 필드명이 환경마다 다를 수 있어 `flightId`, `estimatedDatetime`, `lateralNo`, `lateral1Status` 등 복수 키를 순차 탐색하도록 작성됨
 - 로컬 개발 시 Vite 프록시를 사용하고, 배포 시에는 `api/baggage-arrivals.ts` 서버리스 함수가 공공 API를 중계합니다
 
