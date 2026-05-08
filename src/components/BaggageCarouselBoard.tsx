@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaggageData } from "../hooks/useBaggageData";
 import {
-  collapseDuplicateFlightsPreferClassified,
   compareSlotsByEstimatedArrival,
   diffMinutesArrivalToLastBaggage,
   getSlotDedupeKey,
@@ -764,7 +763,9 @@ export default function BaggageCarouselBoard() {
     if (hideKeCodeshareFlights) {
       list = list.filter((slot) => shouldKeepSlotWithKeCodeshareFilter(slot.flight));
     }
-    return collapseDuplicateFlightsPreferClassified(list);
+    // 화면 단계에서는 같은 편명 슬롯을 강제 1개로 줄이지 않는다.
+    // 그래야 API 갱신으로 시간/적재대가 이동할 때 실제 이동이 그대로 보인다.
+    return list.sort(compareSlotsByEstimatedArrival);
   }, [slots, activeTab, hideKeCodeshareFlights]);
 
   const listSheetSlotItem = useMemo(() => {
