@@ -289,6 +289,24 @@ const pickRawString = (raw: Record<string, unknown>, keys: string[]): string => 
   return "";
 };
 
+const hasActualArrival = (item: BaggageSlot): boolean => {
+  const raw = item.raw as Record<string, unknown>;
+  const actualArrival = pickRawString(raw, [
+    "landingDatetime",
+    "landingDateTime",
+    "actualDatetime",
+    "actualDateTime",
+    "actualTime",
+    "ata",
+  ]);
+  if (actualArrival) return true;
+  const statusText = [item.status, pickRawString(raw, ["remark", "status", "bagRemark"])]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+  return /도착|ARRIV|LANDED/.test(statusText);
+};
+
 /** 첫·마지막 벨트 시각 중 하나라도 있으면(진행 중 포함) 처리 시간 탭·ⓘ 등에서 의미 있음 */
 const hasBaggageProcessingTimes = (item: BaggageSlot): boolean => {
   const raw = item.raw as Record<string, unknown>;
@@ -298,12 +316,13 @@ const hasBaggageProcessingTimes = (item: BaggageSlot): boolean => {
   );
 };
 
-/** 수하물 처리 시간: 편명 / ATA / F(표시만) / L — 소요 분은 ATA~L만 사용 */
+/** 수하물 처리 시간: 편명 / ETA(or ATA) / F(표시만) / L — 소요 분은 도착 시각~L만 사용 */
 const getProcessingParts = (item: BaggageSlot) => {
   const flight =
     sanitizeFlightDisplay((item.flight || "미지정").trim())
       .split(/\s*\/\s*/)[0]
       ?.trim() || "미지정";
+  const arrivalLabel: "ATA" | "ETA" = hasActualArrival(item) ? "ATA" : "ETA";
   const atRaw = (item.estimatedTime || "").trim();
   const at = (formatTime(atRaw) || "").trim() || "—";
   const raw = item.raw as Record<string, unknown>;
@@ -313,11 +332,12 @@ const getProcessingParts = (item: BaggageSlot) => {
   const hasLast = Boolean(lastRaw.trim());
   const f = hasFirst ? formatTime(firstRaw) : "";
   const l = hasLast ? formatTime(lastRaw) : "";
-  return { flight, at, f, l, lastRaw, hasFirst, hasLast };
+  return { flight, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast };
 };
 
 const ProcessingLines = ({
   flight,
+  arrivalLabel,
   at,
   f,
   l,
@@ -326,6 +346,7 @@ const ProcessingLines = ({
   compact,
 }: {
   flight: string;
+  arrivalLabel: "ATA" | "ETA";
   at: string;
   f: string;
   l: string;
@@ -338,7 +359,7 @@ const ProcessingLines = ({
     <div className={`min-w-0 max-w-full space-y-0.5 font-bold tabular-nums text-slate-950 [overflow-wrap:anywhere] ${row}`}>
       <p>{flight}</p>
       <p>
-        ATA {at}
+        {arrivalLabel} {at}
       </p>
       {hasFirst && f ? (
         <p>
@@ -364,7 +385,7 @@ const ProcessingSlotDetail = ({
   /** ATA/F/L 영문 설명 — 시트 등에서만 사용 */
   abbrevLegend?: boolean;
 }) => {
-  const { flight, at, f, l, lastRaw, hasFirst, hasLast } = getProcessingParts(item);
+  const { flight, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast } = getProcessingParts(item);
   const minutes = diffMinutesArrivalToLastBaggage(
     (item.estimatedTime || "").trim(),
     lastRaw,
@@ -374,6 +395,7 @@ const ProcessingSlotDetail = ({
     <>
       <ProcessingLines
         flight={flight}
+        arrivalLabel={arrivalLabel}
         at={at}
         f={f}
         l={l}
@@ -389,6 +411,7 @@ const ProcessingSlotDetail = ({
     <>
       <ProcessingLines
         flight={flight}
+        arrivalLabel={arrivalLabel}
         at={at}
         f={f}
         l={l}
@@ -399,10 +422,10 @@ const ProcessingSlotDetail = ({
       {minutes != null && <p className="mt-1 text-sm font-semibold text-indigo-700">소요 {minutes}분</p>}
       {abbrevLegend ? (
         <div className="mt-1.5 space-y-0.5 text-[11px] leading-snug text-slate-500">
-          <p>ATA = Arrival time</p>
-          <p>F = First baggage (ATA와 L 사이 참고 표시)</p>
+          <p>ETA/ATA = 도착 예정/실제 시각</p>
+          <p>F = First baggage (ETA/ATA와 L 사이 참고 표시)</p>
           <p>L = Last baggage</p>
-          <p className="pt-0.5">소요 시간은 ATA부터 L까지 (F는 계산에 미포함)</p>
+          <p className="pt-0.5">소요 시간은 도착 시각부터 L까지 (F는 계산에 미포함)</p>
         </div>
       ) : null}
     </>
@@ -582,6 +605,7 @@ export default function BaggageCarouselBoard() {
   );
   const [mobileGridZoom, setMobileGridZoom] = useState(1);
   const mobileGridZoomRef = useRef(1);
+  const prevDisplayModeRef = useRef<DisplayMode>(displayMode);
   const tablePinchWrapRef = useRef<HTMLDivElement>(null);
   const pinchGestureRef = useRef<{ dist0: number; zoom0: number } | null>(null);
   const [carouselGuideVisible, setCarouselGuideVisible] = useState(() => loadCarouselGuideVisible());
@@ -857,6 +881,29 @@ export default function BaggageCarouselBoard() {
     return out;
   }, [visibleSlots]);
 
+  const getCurrentSeoulHourKey = useCallback((): string => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Seoul",
+      hour: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+    return `${hh}:00`;
+  }, []);
+
+  const findNearestHourWithItems = useCallback(
+    (startHour: string): string | null => {
+      const idx = hours.indexOf(startHour);
+      if (idx < 0) return hours.find((h) => (cardSlotsByHour.get(h)?.length ?? 0) > 0) ?? null;
+      for (let i = 0; i < hours.length; i++) {
+        const next = hours[(idx + i) % hours.length];
+        if ((cardSlotsByHour.get(next)?.length ?? 0) > 0) return next;
+      }
+      return null;
+    },
+    [hours, cardSlotsByHour]
+  );
+
   /** 목록에서 시간대 순 첫 카드 — 스티키 시간줄·상단바에 툴팁이 겹침 → 해당 카드만 툴팁을 아래로 살짝 이동 */
   const firstListCardSlotKey = useMemo(() => {
     for (const hour of hours) {
@@ -869,6 +916,25 @@ export default function BaggageCarouselBoard() {
     }
     return null;
   }, [hours, cardSlotsByHour]);
+
+  useEffect(() => {
+    const prev = prevDisplayModeRef.current;
+    prevDisplayModeRef.current = displayMode;
+    if (!isMobileGridViewport) return;
+    if (prev === "cards" || displayMode !== "cards") return;
+
+    const targetHour = findNearestHourWithItems(getCurrentSeoulHourKey());
+    if (!targetHour) return;
+
+    const id = window.setTimeout(() => {
+      const safe = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(targetHour) : targetHour;
+      const el = document.querySelector(`[data-hour-section="${safe}"]`);
+      if (el instanceof HTMLElement) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 60);
+    return () => window.clearTimeout(id);
+  }, [displayMode, isMobileGridViewport, getCurrentSeoulHourKey, findNearestHourWithItems]);
 
   /** 격자: 마지막 행·모바일 줌이 홈 인디케이터 등에 가려지지 않게 스크롤 끝 여유 */
   const tableBottomScrollSpacerClass =
@@ -1069,7 +1135,7 @@ export default function BaggageCarouselBoard() {
                 const items = cardSlotsByHour.get(hour);
                 if (!items?.length && !LIST_VIEW_ALWAYS_SHOW_HOURS.has(hour)) return null;
                 return (
-                  <section key={hour} className="overflow-visible pb-1">
+                  <section key={hour} data-hour-section={hour} className="overflow-visible pb-1">
                     <h2 className="sticky top-[var(--list-toolbar-h)] z-10 mb-2 border-b border-slate-200 bg-white/95 pb-1 text-base font-bold tabular-nums tracking-tight text-slate-950 backdrop-blur-sm sm:text-lg">
                       {hour}
                     </h2>
