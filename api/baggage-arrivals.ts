@@ -33,10 +33,10 @@ const DEV_FALLBACK_SERVICE_KEY =
   "21c3a7130b45aa44a1f4c71804810b183e48a420fbb8a26721466ad626a0c6ea";
 
 /**
- * 스냅샷 유효 시간 — 이 안에는 메모리·KV·공공데이터 재호출 없음.
- * `useBaggageData` REFRESH_MS와 동일하게 유지.
+ * 스냅샷 유효 시간 — 클라이언트 `REFRESH_MS`(60s)보다 짧게 유지.
+ * 같거나 길면 배포 환경에서 매 폴링이 동일 JSON이 반복될 수 있음.
  */
-const UPSTREAM_CACHE_TTL_MS = 60 * 1000;
+const UPSTREAM_CACHE_TTL_MS = 50 * 1000;
 
 const SNAPSHOT_KV_KEY = "baggage:snapshot-v3";
 const SNAPSHOT_LOCK_KEY = "baggage:snapshot-lock-v3";
@@ -50,23 +50,10 @@ const LOCK_TTL_SEC = 50;
 /** 업스트림 오류 시에도 응답 가능한 최대 스냅샷 나이 */
 const STALE_FALLBACK_MAX_MS = 15 * 60 * 1000;
 
-/**
- * 브라우저·CDN이 동일 JSON을 재사용.
- */
-const BROWSER_MAX_AGE_SEC = 45;
-const CDN_S_MAXAGE_SEC = 60;
-const CDN_STALE_WHILE_REVALIDATE_SEC = 300;
+/** 1분 폴링 대시보드 — CDN·브라우저에 JSON 고착 방지 */
+const successCacheControl = () => "private, no-cache, no-store, must-revalidate";
 
-const successCacheControl = () =>
-  [
-    "public",
-    `max-age=${BROWSER_MAX_AGE_SEC}`,
-    `s-maxage=${CDN_S_MAXAGE_SEC}`,
-    `stale-while-revalidate=${CDN_STALE_WHILE_REVALIDATE_SEC}`,
-  ].join(", ");
-
-const cdnCacheControlOnly = () =>
-  `public, s-maxage=${CDN_S_MAXAGE_SEC}, stale-while-revalidate=${CDN_STALE_WHILE_REVALIDATE_SEC}`;
+const cdnCacheControlOnly = () => "no-store";
 
 const SNAPSHOT_CACHE_KEY = "snapshot-v1";
 const ROWS_PER_PAGE = 1000;

@@ -44,8 +44,6 @@ export type CarouselDataGridProps = {
   highlightKeys: Set<string>;
   navigateFlashKey: string | null;
   kePinkHighlight: boolean;
-  /** false면 시간·적재대 변경 노란 펄스·배지 숨김 */
-  dataChangeHighlight?: boolean;
   toggleHighlightKey: (slotKey: string) => void;
   variant: CarouselGridVariant;
   renderCellContent: (item: BaggageSlot) => ReactNode;
@@ -56,12 +54,6 @@ export type CarouselDataGridProps = {
     lastBaggagePast: boolean
   ) => string;
   navigateFlashShellClass: string;
-  /** 직전 갱신 대비 시간 변경 등 노란 강조 슬롯 키(유지 시간은 이동/시간에 따라 다름). */
-  recentlyChangedKeys?: Set<string>;
-  /** 직전 갱신 대비 적재대가 바뀐(이동) 슬롯 키 집합 — `recentlyChangedKeys`의 부분집합. */
-  recentlyMovedKeys?: Set<string>;
-  /** slot key → 사람이 읽을 변경 라벨(예: "이동", "시간", "F·L", "스탠드"). */
-  recentChangeLabels?: Map<string, string>;
   /** 격자 칸 L 시각 경과 판별용(서울 기준 wall clock). */
   nowMs: number;
   stickyHeader?: boolean;
@@ -75,15 +67,11 @@ export function CarouselDataGrid({
   highlightKeys,
   navigateFlashKey,
   kePinkHighlight,
-  dataChangeHighlight = true,
   toggleHighlightKey,
   variant,
   renderCellContent,
   slotShellClassFn,
   navigateFlashShellClass,
-  recentlyChangedKeys,
-  recentlyMovedKeys,
-  recentChangeLabels,
   nowMs,
   stickyHeader = true,
 }: CarouselDataGridProps) {
@@ -234,26 +222,8 @@ export function CarouselDataGrid({
                                 item.flight,
                                 kePinkHighlight,
                                 lastPast
-                              )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""} ${
-                                dataChangeHighlight && recentlyChangedKeys?.has(slotKey)
-                                  ? recentlyMovedKeys?.has(slotKey)
-                                    ? "baggage-data-change-flash"
-                                    : "baggage-data-change-flash-short"
-                                  : ""
-                              }`}
+                              )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
                             >
-                              {dataChangeHighlight && recentChangeLabels?.get(slotKey) ? (
-                                <span
-                                  className={`absolute -top-1.5 -right-1 z-10 rounded-full px-1 py-0 text-[8px] font-bold leading-tight text-white shadow ring-1 ring-white ${
-                                    recentlyMovedKeys?.has(slotKey)
-                                      ? "bg-rose-600"
-                                      : "bg-amber-600"
-                                  }`}
-                                  aria-label={`변경: ${recentChangeLabels.get(slotKey)}`}
-                                >
-                                  {recentChangeLabels.get(slotKey)}
-                                </span>
-                              ) : null}
                               {renderCellContent(item)}
                             </article>
                           );

@@ -738,8 +738,11 @@ export function getBaggageArrivalsBaseUrl(): string {
 
 function baggageArrivalsRequestUrl(searchParams: string): string {
   const base = getBaggageArrivalsBaseUrl();
-  const q = searchParams.startsWith("?") ? searchParams : `?${searchParams}`;
-  return `${base}${q}`;
+  const raw = searchParams.startsWith("?") ? searchParams.slice(1) : searchParams;
+  const params = new URLSearchParams(raw);
+  /** Vercel CDN·엣지가 동일 URL 본문을 재사용하지 않도록 */
+  params.set("_", String(Date.now()));
+  return `${base}?${params.toString()}`;
 }
 
 const containsLikelyHtml = (s: string): boolean => {

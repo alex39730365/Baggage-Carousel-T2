@@ -14,10 +14,6 @@ import {
   RAW_STATUS_KEYS,
   sanitizeFlightDisplay,
 } from "../lib/baggageApi";
-import {
-  loadDataChangeHighlight,
-  saveDataChangeHighlight,
-} from "../lib/dataChangeHighlightPref";
 import { shouldKeepSlotWithKeCodeshareFilter } from "../lib/keCodeshareFilter";
 import { DashboardControlStack } from "../dashboard/DashboardControlStack";
 import type { DisplayMode, TabKey } from "../dashboard/controlTypes";
@@ -62,7 +58,7 @@ const persistHighlights = (keys: Set<string>) => {
 };
 
 /** 목록·격자 카드 공통: 테두리+배경 (비강조는 기존과 비슷한 톤).
- *  - KE 본편 자동(파랑)·KE 클릭(분홍)·데이터 변경(노랑)·이동(rose)과 모두 안 겹치게
+ *  - KE 본편 자동(파랑)·KE 클릭(분홍)과 겹치지 않게
  *    클릭 강조는 violet(보라) 계열로 두툼하게(ring-2). */
 const highlightShellClass = (on: boolean) =>
   on
@@ -550,15 +546,11 @@ export default function BaggageCarouselBoard() {
     slotsByDate,
     selectedDate,
     setSelectedDate,
-    recentlyChangedKeys,
-    recentlyMovedKeys,
-    recentChangeLabels,
   } = useBaggageData();
   const [keyword, setKeyword] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("terminal2");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => loadDisplayMode() ?? "table");
   const [kePinkHighlight] = useState(() => loadKePinkHighlight());
-  const [dataChangeHighlight, setDataChangeHighlight] = useState(() => loadDataChangeHighlight());
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(loadHighlightSet);
   const [navigateFlashKey, setNavigateFlashKey] = useState<string | null>(null);
   const navigateFlashTimerRef = useRef<number | null>(null);
@@ -588,14 +580,6 @@ export default function BaggageCarouselBoard() {
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 15_000);
     return () => window.clearInterval(id);
-  }, []);
-
-  const toggleDataChangeHighlight = useCallback(() => {
-    setDataChangeHighlight((prev) => {
-      const next = !prev;
-      saveDataChangeHighlight(next);
-      return next;
-    });
   }, []);
 
   const toggleCarouselGuide = useCallback(() => {
@@ -983,8 +967,6 @@ export default function BaggageCarouselBoard() {
           searchRows={searchRows}
           navigateFlashKey={navigateFlashKey}
           kePinkHighlight={kePinkHighlight}
-          dataChangeHighlight={dataChangeHighlight}
-          onToggleDataChangeHighlight={toggleDataChangeHighlight}
           onSearchRowNavigate={handleSearchRowClick}
           isMainlineKeFlight={isMainlineKeFlight}
           visibleSlots={visibleSlots}
@@ -1082,26 +1064,8 @@ export default function BaggageCarouselBoard() {
                                 item.flight,
                                 kePinkHighlight,
                                 isBagLastTimePassed(item, nowMs)
-                              )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""} ${
-                                dataChangeHighlight && recentlyChangedKeys.has(slotKey)
-                                  ? recentlyMovedKeys.has(slotKey)
-                                    ? "baggage-data-change-flash"
-                                    : "baggage-data-change-flash-short"
-                                  : ""
-                              }`}
+                              )} ${navigateFlashKey === slotKey ? navigateFlashShellClass : ""}`}
                             >
-                              {dataChangeHighlight && recentChangeLabels.get(slotKey) ? (
-                                <span
-                                  className={`absolute -top-1.5 -right-1.5 z-10 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-tight text-white shadow ring-1 ring-white ${
-                                    recentlyMovedKeys.has(slotKey)
-                                      ? "bg-rose-600"
-                                      : "bg-amber-600"
-                                  }`}
-                                  aria-label={`변경: ${recentChangeLabels.get(slotKey)}`}
-                                >
-                                  {recentChangeLabels.get(slotKey)}
-                                </span>
-                              ) : null}
                               <div className="min-w-0 flex-1">
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                   <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-900">
@@ -1223,15 +1187,11 @@ export default function BaggageCarouselBoard() {
                     highlightKeys={highlightKeys}
                     navigateFlashKey={navigateFlashKey}
                     kePinkHighlight={kePinkHighlight}
-                    dataChangeHighlight={dataChangeHighlight}
                     toggleHighlightKey={toggleHighlightKey}
                     variant="processing"
                     renderCellContent={(item) => <ProcessingSlotDetail item={item} compact />}
                     slotShellClassFn={slotShellClass}
                     navigateFlashShellClass={navigateFlashShellClass}
-                    recentlyChangedKeys={recentlyChangedKeys}
-                    recentlyMovedKeys={recentlyMovedKeys}
-                    recentChangeLabels={recentChangeLabels}
                     nowMs={nowMs}
                     stickyHeader={!isMobileGridViewport && Math.abs(mobileGridZoom - 1) < 0.0001}
                   />
@@ -1267,15 +1227,11 @@ export default function BaggageCarouselBoard() {
                 highlightKeys={highlightKeys}
                 navigateFlashKey={navigateFlashKey}
                 kePinkHighlight={kePinkHighlight}
-                dataChangeHighlight={dataChangeHighlight}
                 toggleHighlightKey={toggleHighlightKey}
                 variant="schedule"
                 renderCellContent={(item) => <SlotDetail item={item} compact />}
                 slotShellClassFn={slotShellClass}
                 navigateFlashShellClass={navigateFlashShellClass}
-                recentlyChangedKeys={recentlyChangedKeys}
-                recentlyMovedKeys={recentlyMovedKeys}
-                recentChangeLabels={recentChangeLabels}
                 nowMs={nowMs}
                 stickyHeader={!isMobileGridViewport && Math.abs(mobileGridZoom - 1) < 0.0001}
               />

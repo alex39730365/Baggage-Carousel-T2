@@ -101,13 +101,6 @@ export function DashboardHelpDialog({ open, onClose }: DashboardHelpDialogProps)
                 강조가 켜지고, KE 본편은 분홍 테두리·다른 편은 보라 테두리로 구분됩니다. 설정은 이
                 브라우저에 저장됩니다.
               </li>
-              <li>
-                데이터가 갱신된 뒤 <strong className="font-semibold text-slate-800">예정 시각·시간대</strong>가
-                바뀐 칸은 노란색으로 잠깐 강조됩니다(컨트롤 맨 아래 <strong className="font-semibold text-slate-800">변경 강조 끄기</strong>{" "}
-                링크로 끌 수 있음). <strong className="font-semibold text-slate-800">적재대 이동</strong>은 더 오래,
-                펄스도 길게 유지됩니다. 작은 배지로 &quot;시간&quot;·&quot;이동&quot;을
-                붙입니다.
-              </li>
               <li>격자 헤더의 WEST는 초록, EAST는 주황 톤으로 구역만 구분합니다.</li>
             </ul>
           </section>

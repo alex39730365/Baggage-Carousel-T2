@@ -17,8 +17,6 @@ export type DashboardControlStackProps = {
   searchRows: FlightSearchRow[];
   navigateFlashKey: string | null;
   kePinkHighlight: boolean;
-  dataChangeHighlight: boolean;
-  onToggleDataChangeHighlight: () => void;
   onSearchRowNavigate: (dedupeKey: string) => void;
   isMainlineKeFlight: (flight: string) => boolean;
   visibleSlots: BaggageSlot[];
@@ -37,8 +35,6 @@ export function DashboardControlStack({
   searchRows,
   navigateFlashKey,
   kePinkHighlight,
-  dataChangeHighlight,
-  onToggleDataChangeHighlight,
   onSearchRowNavigate,
   isMainlineKeFlight,
   visibleSlots,
@@ -151,29 +147,6 @@ export function DashboardControlStack({
       </div>
 
       <CsvExportBar visibleSlots={visibleSlots} selectedDate={selectedDate} activeTab={activeTab} />
-
-      <div className="flex justify-end pr-0.5">
-        <button
-          type="button"
-          aria-pressed={dataChangeHighlight}
-          aria-label={
-            dataChangeHighlight
-              ? "적재대·시간 변경 노란 강조 끄기"
-              : "적재대·시간 변경 노란 강조 켜기"
-          }
-          title={
-            dataChangeHighlight
-              ? "적재대·시간 이동 시 노란색 강조를 끕니다."
-              : "API 갱신으로 바뀐 칸을 노란색으로 다시 강조합니다."
-          }
-          onClick={onToggleDataChangeHighlight}
-          className={`max-w-[9rem] truncate text-[10px] leading-tight text-slate-400/90 underline-offset-2 transition-colors hover:text-slate-500 focus-visible:rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-slate-300 ${
-            dataChangeHighlight ? "hover:underline" : "font-medium text-slate-500 hover:underline"
-          }`}
-        >
-          {dataChangeHighlight ? "변경 강조 끄기" : "변경 강조 켜기"}
-        </button>
-      </div>
     </div>
   );
 }
