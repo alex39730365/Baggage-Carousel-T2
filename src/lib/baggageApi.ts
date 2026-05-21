@@ -31,6 +31,108 @@ const pickString = (obj: RawBaggageItem, keys: string[]): string => {
   return "";
 };
 
+/** 공공데이터·게이트웨이별 필드명 — `normalizeItem`·병합·변경 감지·UI에서 동일 순서로 사용 */
+export const RAW_FLIGHT_KEYS = [
+  "flightId",
+  "flightNo",
+  "airlineFlightNo",
+  "flight",
+  "fltId",
+  "fltNo",
+  "airline",
+] as const;
+
+export const RAW_TYPE_OF_FLIGHT_KEYS = ["typeOfFlight", "flightType", "ioType", "domIntType"] as const;
+
+export const RAW_ESTIMATED_TIME_KEYS = [
+  "estimatedDatetime",
+  "estimatedDateTime",
+  "estimatedTime",
+  "eta",
+  "estmDttm",
+  "estimatedDT",
+  "estimatedDttm",
+] as const;
+
+export const RAW_SCHEDULE_TIME_KEYS = [
+  "scheduleDatetime",
+  "scheduleDateTime",
+  "std",
+  "scheduledDatetime",
+  "schedDT",
+  "scheduledDttm",
+] as const;
+
+export const RAW_BAG_FIRST_TIME_KEYS = [
+  "bagFirstTime",
+  "bagfirstTime",
+  "firstBaggageTime",
+  "firstBagTime",
+  "baggageFirstTime",
+  "fdcsFirstBagTime",
+] as const;
+
+export const RAW_BAG_LAST_TIME_KEYS = [
+  "bagLastTime",
+  "baglastTime",
+  "lastBaggageTime",
+  "lastBagTime",
+  "baggageLastTime",
+  "fdcsLastBagTime",
+] as const;
+
+export const RAW_LATERAL_KEYS = [
+  "lateral1",
+  "lateralNo",
+  "lateralNum",
+  "lateral1No",
+  "carouselNo",
+  "carousel",
+  "bagCarouselId",
+  "assignedCarousel",
+  "claimDeskNo",
+  "baggageClaimDesk",
+] as const;
+
+export const RAW_LATERAL2_KEYS = ["lateral2", "bagCarouselId2", "lateral2No"] as const;
+
+export const RAW_STATUS_KEYS = [
+  "lateral1Status",
+  "lateralStatus",
+  "status",
+  "baggageStatus",
+  "bagRemark",
+  "claimStatus",
+] as const;
+
+export const RAW_PIECES_KEYS = ["baggagePieces", "pc", "pieces", "cargoCount", "bagPc", "bagPiece"] as const;
+
+export const RAW_NOTE_KEYS = ["remark", "note", "specialRemark", "rmk"] as const;
+
+export const RAW_ACTUAL_ARRIVAL_KEYS = [
+  "landingDatetime",
+  "landingDateTime",
+  "actualDatetime",
+  "actualDateTime",
+  "actualTime",
+  "ata",
+  "arrivalDatetime",
+  "arrivalDateTime",
+  "ataDatetime",
+  "ataDateTime",
+  "landingDttm",
+  "arrDttm",
+] as const;
+
+export const RAW_STAND_KEYS = [
+  "fstandPosition",
+  "gateNumber",
+  "stand",
+  "airportStand",
+  "boardingGate",
+  "parkingStand",
+] as const;
+
 const SEOUL_TZ = "Asia/Seoul";
 
 /** 순간(UTC 등) → 서울 달력·시·분 */
@@ -66,16 +168,18 @@ const formatInstantToSeoulWall = (inst: Date): { dateKey: string; hh: number; mm
 
 /**
  * API 시각 문자열 → 서울 기준 날짜·시·분.
- * - `YYYYMMDDHHmm…` 연속 숫자(공공데이터): KST 달력으로 그대로 해석
- * - ISO·Z·오프셋: Instant로 파싱 후 서울로 변환 (UTC로만 오는 값에서 23시가 어긋나는 문제 완화)
+ * - `YYYYMMDDHHmm…` **문자열이 숫자만**일 때: 공공데이터 KST 달력으로 해석
+ * - `YYYY-MM-DDTHH:mm(:ss)?` **타임존 없음**: 브라우저 로컬이 아니라 **서울 벽시각**으로 해석
+ * - `Z`·`±HH:mm` 오프셋·`T` 포함 ISO: Instant로 파싱 후 서울로 변환
  */
 export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number; mm: number } | null {
   const t = raw.trim();
   if (!t) return null;
 
-  const digits = t.replace(/\D/g, "");
-  /** YYYYMMDDHH / YYYYMMDDHHmm / YYYYMMDDHHmmss… — 앞 14자리만 사용(초 이하 무시) */
-  if (/^\d+$/.test(digits) && digits.length >= 10) {
+  const wallCompact = t.replace(/\s/g, "");
+  /** ISO를 숫자만 잘라 첫 분기에 넣으면 Z/오프셋이 사라져 시각이 틀어짐 → “숫자만”인 경우만 compact */
+  if (/^\d{10,14}$/.test(wallCompact)) {
+    const digits = wallCompact.slice(0, 14);
     const y = digits.slice(0, 4);
     const mo = digits.slice(4, 6);
     const da = digits.slice(6, 8);
@@ -100,6 +204,42 @@ export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number;
       hh: ((Math.floor(hh) % 24) + 24) % 24,
       mm: Math.max(0, Math.min(59, Math.floor(mm))),
     };
+  }
+
+  const digits = t.replace(/\D/g, "");
+
+  /** 타임존 없는 ISO 형 — `new Date`는 로컬로 해석하므로 서울 벽시각으로 고정 */
+  const hasExplicitZone = /(?:[zZ]|[+-]\d{2}:\d{2})$/.test(t);
+  if (!hasExplicitZone) {
+    const naked = t.match(
+      /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/
+    );
+    if (naked) {
+      const y = naked[1]!;
+      const mo = naked[2]!;
+      const da = naked[3]!;
+      const hh = Number(naked[4]!);
+      const mm = Number(naked[5]!);
+      const monthNum = Number(mo);
+      const dayNum = Number(da);
+      if (
+        !Number.isFinite(monthNum) ||
+        monthNum < 1 ||
+        monthNum > 12 ||
+        !Number.isFinite(dayNum) ||
+        dayNum < 1 ||
+        dayNum > 31 ||
+        !Number.isFinite(hh) ||
+        !Number.isFinite(mm)
+      ) {
+        return null;
+      }
+      return {
+        dateKey: `${y}-${mo}-${da}`,
+        hh: ((Math.floor(hh) % 24) + 24) % 24,
+        mm: Math.max(0, Math.min(59, Math.floor(mm))),
+      };
+    }
   }
 
   const inst = new Date(t);
@@ -220,7 +360,7 @@ export function diffMinutesArrivalToLastBaggage(
 
 /** 마지막 수하물(L) 시각을 UTC ms로. 없거나 파싱 불가면 null. */
 export function getBagLastTimeUtcMs(slot: BaggageSlot): number | null {
-  const t = pickString(slot.raw, ["bagLastTime", "baglastTime"]).trim();
+  const t = pickString(slot.raw, [...RAW_BAG_LAST_TIME_KEYS]).trim();
   if (!t) return null;
   const w = parseSeoulWallClock(t);
   if (!w) return null;
@@ -263,18 +403,7 @@ const pickBucketTimeWithStableDate = (scheduleTime: string, estimatedOnly: strin
 };
 
 const parseCarouselNumbers = (item: RawBaggageItem): number[] => {
-  const texts = [
-    pickString(item, [
-      "lateral1",
-      "lateralNo",
-      "lateralNum",
-      "lateral1No",
-      "carouselNo",
-      "carousel",
-      "bagCarouselId",
-    ]),
-    pickString(item, ["lateral2", "bagCarouselId2"]),
-  ].filter(Boolean);
+  const texts = [pickString(item, [...RAW_LATERAL_KEYS]), pickString(item, [...RAW_LATERAL2_KEYS])].filter(Boolean);
 
   const result = new Set<number>();
   for (const text of texts) {
@@ -288,25 +417,19 @@ const parseCarouselNumbers = (item: RawBaggageItem): number[] => {
 };
 
 const normalizeItem = (item: RawBaggageItem): BaggageSlot[] => {
-  const flight = sanitizeFlightDisplay(pickString(item, ["flightId", "flightNo", "airlineFlightNo", "airline"]));
-  const typeOfFlight = pickString(item, ["typeOfFlight", "flightType"]).toUpperCase();
+  const flight = sanitizeFlightDisplay(pickString(item, [...RAW_FLIGHT_KEYS]));
+  const typeOfFlight = pickString(item, [...RAW_TYPE_OF_FLIGHT_KEYS]).toUpperCase();
 
   /** 표시·정렬용 (예정 우선) */
-  const estimatedOnly = pickString(item, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]);
+  const estimatedOnly = pickString(item, [...RAW_ESTIMATED_TIME_KEYS]);
   /** 격자 날짜·시간 행: 화면에 보이는 표시 시각(displayTime) 기준으로 맞춘다. */
-  const scheduleTime = pickString(item, ["scheduleDatetime", "scheduleDateTime", "std"]);
+  const scheduleTime = pickString(item, [...RAW_SCHEDULE_TIME_KEYS]);
   const displayTime = estimatedOnly.trim() || scheduleTime.trim();
   const bucketTime = pickBucketTimeWithStableDate(scheduleTime, estimatedOnly) || displayTime;
   const { dateKey, hour } = bucketDateHour(bucketTime);
-  const status = pickString(item, [
-    "lateral1Status",
-    "lateralStatus",
-    "status",
-    "baggageStatus",
-    "bagRemark",
-  ]);
-  const pieces = pickString(item, ["baggagePieces", "pc", "pieces", "cargoCount"]);
-  const note = pickString(item, ["remark", "note", "specialRemark"]);
+  const status = pickString(item, [...RAW_STATUS_KEYS]);
+  const pieces = pickString(item, [...RAW_PIECES_KEYS]);
+  const note = pickString(item, [...RAW_NOTE_KEYS]);
 
   const carousels = parseCarouselNumbers(item);
   if (carousels.length === 0) return [];
@@ -348,8 +471,8 @@ export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): 
 
 /** 격자 `date`·`hour` 행은 표시 시각 우선으로 맞춤 — 병합·캐시 후에도 `normalizeItem`과 동일 규칙 */
 export function alignSlotBucketToEstimated(slot: BaggageSlot): BaggageSlot {
-  const scheduleTime = pickString(slot.raw, ["scheduleDatetime", "scheduleDateTime", "std"]).trim();
-  const estimatedOnly = pickString(slot.raw, ["estimatedDatetime", "estimatedDateTime", "estimatedTime"]).trim();
+  const scheduleTime = pickString(slot.raw, [...RAW_SCHEDULE_TIME_KEYS]).trim();
+  const estimatedOnly = pickString(slot.raw, [...RAW_ESTIMATED_TIME_KEYS]).trim();
   const displayTime = slot.estimatedTime.trim() || estimatedOnly || scheduleTime;
   const bucketTime = pickBucketTimeWithStableDate(scheduleTime, estimatedOnly) || displayTime;
   if (!bucketTime.trim()) return slot;
@@ -383,9 +506,8 @@ const isArrivalLikeType = (s: BaggageSlot): boolean => {
   return t === "I" || t === "D";
 };
 
-const rawBagFirst = (raw: RawBaggageItem): string =>
-  pickString(raw, ["bagFirstTime", "bagfirstTime"]);
-const rawBagLast = (raw: RawBaggageItem): string => pickString(raw, ["bagLastTime", "baglastTime"]);
+const rawBagFirst = (raw: RawBaggageItem): string => pickString(raw, [...RAW_BAG_FIRST_TIME_KEYS]);
+const rawBagLast = (raw: RawBaggageItem): string => pickString(raw, [...RAW_BAG_LAST_TIME_KEYS]);
 
 const hasCompleteBaggageTimesRaw = (raw: RawBaggageItem): boolean =>
   Boolean(rawBagFirst(raw) && rawBagLast(raw));
@@ -620,21 +742,72 @@ function baggageArrivalsRequestUrl(searchParams: string): string {
   return `${base}${q}`;
 }
 
+const containsLikelyHtml = (s: string): boolean => {
+  const t = s.toLowerCase();
+  return (
+    t.includes("<html") ||
+    t.includes("<!doctype") ||
+    t.includes("</body>") ||
+    t.includes("<head") ||
+    (t.includes("<body") && t.includes("<")) ||
+    (t.includes("<h1") && t.includes("</h1>"))
+  );
+};
+
+/** JSON·플레인 텍스트는 그대로(길이 제한), HTML·JSON 안 HTML은 UI용 짧은 문장으로 치환 */
+export function sanitizeFetchErrorBody(text: string, httpStatus: number): string {
+  const raw = text.trim();
+  if (!raw) return "";
+  if (/unexpected token/i.test(raw) && raw.includes("<")) {
+    return htmlErrorUserMessage(httpStatus || 502, raw);
+  }
+  if (containsLikelyHtml(raw)) {
+    return htmlErrorUserMessage(httpStatus, raw);
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      message?: string;
+      error?: string;
+      response?: { header?: { resultMsg?: string } };
+    };
+    const msg =
+      parsed.message?.trim() ||
+      (typeof parsed.error === "string" ? parsed.error.trim() : "") ||
+      parsed.response?.header?.resultMsg?.trim() ||
+      "";
+    if (msg) {
+      if (containsLikelyHtml(msg)) {
+        return htmlErrorUserMessage(httpStatus || 502, msg);
+      }
+      return msg.length > 200 ? `${msg.slice(0, 197)}...` : msg;
+    }
+  } catch {
+    // not JSON
+  }
+  return raw.length > 200 ? `${raw.slice(0, 197)}...` : raw;
+}
+
+function htmlErrorUserMessage(httpStatus: number, raw: string): string {
+  const h1 = raw.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const title = h1?.[1]?.replace(/<[^>]+>/g, "")?.trim();
+  if (httpStatus === 502 || httpStatus === 0) {
+    if (title && !/^502\s+bad\s+gateway/i.test(title)) {
+      return `502 Bad Gateway — ${title}. 중계 서버가 HTML 오류를 반환했습니다.`;
+    }
+    return "502 Bad Gateway — 중계 서버가 HTML 오류를 반환했습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  if (httpStatus === 504) {
+    return "504 Gateway Timeout — 서버 응답이 지연되었습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return title
+    ? `HTTP ${httpStatus} (${title}). 서버가 HTML 오류 페이지를 반환했습니다.`
+    : `HTTP ${httpStatus} — 서버가 HTML 오류 페이지를 반환했습니다.`;
+}
+
 export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
   const allSlots: BaggageSlot[] = [];
   let lastError = "";
-  const parseErrorDetail = (text: string): string => {
-    if (!text.trim()) return "";
-    try {
-      const parsed = JSON.parse(text) as {
-        message?: string;
-        response?: { header?: { resultMsg?: string } };
-      };
-      return parsed.message?.trim() ?? parsed.response?.header?.resultMsg?.trim() ?? text.trim().slice(0, 120);
-    } catch {
-      return text.trim().slice(0, 120);
-    }
-  };
+  const parseErrorDetail = (text: string, status: number): string => sanitizeFetchErrorBody(text, status);
 
   const url = baggageArrivalsRequestUrl("type=json");
   /** 1분 폴링 시 CDN·브라우저 캐시로 인한 이전 응답 고착 방지 */
@@ -646,18 +819,7 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       try {
         const text = await res.text();
         if (text.trim()) {
-          try {
-            const parsed = JSON.parse(text) as {
-              message?: string;
-              response?: { header?: { resultMsg?: string } };
-            };
-            detail =
-              parsed.message?.trim() ??
-              parsed.response?.header?.resultMsg?.trim() ??
-              text.trim().slice(0, 120);
-          } catch {
-            detail = text.trim().slice(0, 120);
-          }
+          detail = parseErrorDetail(text, res.status);
         }
       } catch {
         // ignore body read failure
@@ -673,7 +835,14 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
       }
       throw new Error(lastError || "API 요청 실패");
     }
-    const json = await res.json();
+    const okBodyText = await res.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(okBodyText);
+    } catch {
+      lastError = `API 응답이 JSON이 아닙니다. ${sanitizeFetchErrorBody(okBodyText, res.status)}`;
+      throw new Error(lastError);
+    }
     let items = extractItemsArray(json);
     const totalCount = extractTotalCount(json);
 
@@ -689,13 +858,19 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
           const pageRes = await fetch(pageUrl, fetchInit);
           if (!pageRes.ok) {
             const t = await pageRes.text();
-            const detail = parseErrorDetail(t);
+            const detail = parseErrorDetail(t, pageRes.status);
             if (pageRes.status === 429) {
               throw new Error("API 호출 한도 초과(429)입니다. 잠시 후 다시 시도해 주세요.");
             }
             throw new Error(detail || `API 요청 실패 (${pageRes.status})`);
           }
-          const pageJson = await pageRes.json();
+          const pageBody = await pageRes.text();
+          let pageJson: unknown;
+          try {
+            pageJson = JSON.parse(pageBody);
+          } catch {
+            throw new Error(sanitizeFetchErrorBody(pageBody, pageRes.status) || `API 응답 파싱 실패 (${pageRes.status})`);
+          }
           const pageItems = extractItemsArray(pageJson);
           fanoutItems.push(...pageItems);
           if (pageItems.length < DEV_ROWS_PER_PAGE) break;
@@ -706,7 +881,10 @@ export async function fetchBaggageSlots(): Promise<BaggageSlot[]> {
 
     allSlots.push(...items.flatMap((item) => normalizeItem(item as RawBaggageItem)));
   } catch (err) {
-    if (!lastError) lastError = err instanceof Error ? err.message : "요청 실패";
+    if (!lastError) {
+      const rawMsg = err instanceof Error ? err.message : "요청 실패";
+      lastError = sanitizeFetchErrorBody(rawMsg, 0) || rawMsg;
+    }
     throw new Error(lastError || "API 요청 실패");
   }
   /** 날짜가 섞인 채로 편당 병합하면 다른 날 항공편이 한 줄로 합쳐짐 → 날짜별로 나눔 */

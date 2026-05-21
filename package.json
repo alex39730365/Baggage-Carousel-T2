@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview": "vite preview",
+    "pdf:devdoc": "node scripts/md-to-pdf.mjs 통합문서.md 통합문서.pdf \"수하물 캐러셀 현황 웹 통합 문서\""
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
@@ -20,9 +23,12 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.21",
+    "marked": "^15.0.0",
     "postcss": "^8.5.6",
+    "puppeteer-core": "^24.0.0",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vitest": "^4.1.6"
   }
 }
