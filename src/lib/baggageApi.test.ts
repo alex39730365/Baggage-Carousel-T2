@@ -4,6 +4,7 @@ import {
   diffMinutesArrivalToLastBaggage,
   getBagLastTimeUtcMs,
   parseSeoulWallClock,
+  pickBucketTimeWithStableDate,
   sanitizeFetchErrorBody,
 } from "./baggageApi";
 
@@ -102,5 +103,35 @@ describe("diffMinutesArrivalToLastBaggage", () => {
   it("computes minutes from arrival to L on same calendar day", () => {
     const m = diffMinutesArrivalToLastBaggage("202605131400", "202605131430", "2026-05-13");
     expect(m).toBe(30);
+  });
+});
+
+describe("pickBucketTimeWithStableDate", () => {
+  it("uses estimated time for a genuine red-eye delay across midnight", () => {
+    // KE852-like: scheduled 21:40, estimated next day 00:06
+    const picked = pickBucketTimeWithStableDate("202604242140", "202604250006");
+    expect(picked).toBe("202604250006");
+  });
+
+  it("falls back to schedule for arbitrary one-day-off estimated dates", () => {
+    // estimated date is wrong by one day but time is same
+    const picked = pickBucketTimeWithStableDate("202604242140", "202604252140");
+    expect(picked).toBe("202604242140");
+  });
+
+  it("uses schedule when estimated is an unusual early-morning without late-night schedule", () => {
+    const picked = pickBucketTimeWithStableDate("202604241200", "202604250100");
+    expect(picked).toBe("202604241200");
+  });
+
+  it("uses estimated for a late-night flight delayed just past midnight", () => {
+    // TW248-like: scheduled 23:55, estimated next day 00:07
+    const picked = pickBucketTimeWithStableDate("202608022355", "202608030007");
+    expect(picked).toBe("202608030007");
+  });
+
+  it("prefers schedule when the cross-midnight delay is too long", () => {
+    const picked = pickBucketTimeWithStableDate("202604242100", "202604250900");
+    expect(picked).toBe("202604242100");
   });
 });

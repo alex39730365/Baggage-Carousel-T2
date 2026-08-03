@@ -383,11 +383,20 @@ const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
 };
 
 /**
- * 날짜 버킷은 예정(schedule) 날짜를 우선 신뢰.
- * 일부 API 응답에서 estimatedDatetime의 날짜가 실제 운항일과 어긋나는 경우가 있어
- * `24일/25일` 같은 날짜 탭이 사라지는 문제를 막는다.
+ * 자정 전후(red-eye) 지연을 허용하면서도, 날짜가 어긋난 API 응답으로
+ * 날짜 탭이 사라지는 문제를 방지하기 위해 예정(schedule) 날짜를 우선 신뢰.
+ *
+ * - 예정 시간이 밤(>=LATE_NIGHT_SCHEDULE_HOUR)이고,
+ * - 예측 시간이 익일 새벽(<EARLY_MORNING_ESTIMATED_HOUR_CUTOFF)이며,
+ * - 예정→예측 시간차가 0보다 크고 MAX_CROSS_MIDNIGHT_DELAY_MS 이하이면
+ *   예측 시간을 버킷 기준으로 사용해 실제 시간 흐름에 맞는 행에 배치.
+ * - 그 외 날짜 불일치는 예정 시간을 유지해 탭 안정성을 보장.
  */
-const pickBucketTimeWithStableDate = (scheduleTime: string, estimatedOnly: string): string => {
+const LATE_NIGHT_SCHEDULE_HOUR = 18;
+const EARLY_MORNING_ESTIMATED_HOUR_CUTOFF = 7; // 00:00 ~ 06:59
+const MAX_CROSS_MIDNIGHT_DELAY_MS = 8 * 60 * 60 * 1000;
+
+export const pickBucketTimeWithStableDate = (scheduleTime: string, estimatedOnly: string): string => {
   const s = scheduleTime.trim();
   const e = estimatedOnly.trim();
   if (!s && !e) return "";
@@ -396,9 +405,26 @@ const pickBucketTimeWithStableDate = (scheduleTime: string, estimatedOnly: strin
 
   const sw = parseSeoulWallClock(s);
   const ew = parseSeoulWallClock(e);
-  if (sw?.dateKey && sw.dateKey !== "unknown") {
-    if (!ew || ew.dateKey === "unknown" || ew.dateKey !== sw.dateKey) return s;
+  if (!sw || sw.dateKey === "unknown") return e;
+  if (!ew || ew.dateKey === "unknown") return s;
+
+  // 자정 전후 지연일 때는 예측 시간을 버킷에 반영
+  if (ew.dateKey !== sw.dateKey) {
+    const sMs = seoulDateWallToUtcMs(sw.dateKey, sw.hh, sw.mm);
+    const eMs = seoulDateWallToUtcMs(ew.dateKey, ew.hh, ew.mm);
+    if (
+      sMs !== null &&
+      eMs !== null &&
+      eMs > sMs &&
+      eMs - sMs <= MAX_CROSS_MIDNIGHT_DELAY_MS &&
+      sw.hh >= LATE_NIGHT_SCHEDULE_HOUR &&
+      ew.hh < EARLY_MORNING_ESTIMATED_HOUR_CUTOFF
+    ) {
+      return e;
+    }
+    return s;
   }
+
   return e;
 };
 
