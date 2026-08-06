@@ -257,12 +257,13 @@ const hasBaggageProcessingTimes = (item: BaggageSlot): boolean => {
   );
 };
 
-/** 수하물 처리 시간: 편명 / ETA(or ATA) / F(표시만) / L — 소요 분은 도착 시각~L만 사용 */
+/** 수하물 처리 시간: 편명 / 공항 코드 / ETA(or ATA) / F(표시만) / L — 소요 분은 도착 시각~L만 사용 */
 const getProcessingParts = (item: BaggageSlot) => {
-  const flight =
-    sanitizeFlightDisplay((item.flight || "미지정").trim())
-      .split(/\s*\/\s*/)[0]
-      ?.trim() || "미지정";
+  const fullFlight = sanitizeFlightDisplay((item.flight || "미지정").trim());
+  const flight = fullFlight.split(/\s*\/\s*/)[0]?.trim() || "미지정";
+  const tail = tailTokenFromFlight(fullFlight);
+  const code = getAirportCode(item.raw).trim();
+  const airportCode = code && code !== "UNK" && code.toUpperCase() !== tail ? code : "";
   const arrivalLabel: "ATA" | "ETA" = hasActualArrival(item) ? "ATA" : "ETA";
   const atRaw = (item.estimatedTime || "").trim();
   const at = (formatTime(atRaw) || "").trim() || "—";
@@ -273,11 +274,12 @@ const getProcessingParts = (item: BaggageSlot) => {
   const hasLast = Boolean(lastRaw.trim());
   const f = hasFirst ? formatTime(firstRaw) : "";
   const l = hasLast ? formatTime(lastRaw) : "";
-  return { flight, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast };
+  return { flight, airportCode, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast };
 };
 
 const ProcessingLines = ({
   flight,
+  airportCode,
   arrivalLabel,
   at,
   f,
@@ -287,6 +289,7 @@ const ProcessingLines = ({
   compact,
 }: {
   flight: string;
+  airportCode: string;
   arrivalLabel: "ATA" | "ETA";
   at: string;
   f: string;
@@ -301,6 +304,14 @@ const ProcessingLines = ({
       <p title={flight} className="block w-full max-w-full whitespace-nowrap [overflow-wrap:normal]">
         {flight}
       </p>
+      {airportCode ? (
+        <p
+          title={airportCode}
+          className={`block w-full max-w-full truncate ${compact ? "text-[9px] leading-tight" : "text-xs"} text-slate-500`}
+        >
+          {airportCode}
+        </p>
+      ) : null}
       <p>
         {arrivalLabel} {at}
       </p>
@@ -328,7 +339,7 @@ const ProcessingSlotDetail = ({
   /** ATA/F/L 영문 설명 — 시트 등에서만 사용 */
   abbrevLegend?: boolean;
 }) => {
-  const { flight, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast } = getProcessingParts(item);
+  const { flight, airportCode, arrivalLabel, at, f, l, lastRaw, hasFirst, hasLast } = getProcessingParts(item);
   const minutes = diffMinutesArrivalToLastBaggage(
     (item.estimatedTime || "").trim(),
     lastRaw,
@@ -338,6 +349,7 @@ const ProcessingSlotDetail = ({
     <>
       <ProcessingLines
         flight={flight}
+        airportCode={airportCode}
         arrivalLabel={arrivalLabel}
         at={at}
         f={f}
@@ -354,6 +366,7 @@ const ProcessingSlotDetail = ({
     <>
       <ProcessingLines
         flight={flight}
+        airportCode={airportCode}
         arrivalLabel={arrivalLabel}
         at={at}
         f={f}
