@@ -523,7 +523,7 @@ export function getEstimatedTimeMinutesFromNow(slot: BaggageSlot, nowMs: number)
   return Math.round((ms - nowMs) / 60_000);
 }
 
-export const DEFAULT_MAX_PAST_HOURS = 12;
+export const DEFAULT_MAX_PAST_HOURS = 24;
 
 /** nowMs 기준 maxPastHours 이상 지난 과거 데이터를 제외. 미래·파싱 불가는 유지. */
 export function filterSlotsByRecency(
@@ -539,7 +539,7 @@ export function filterSlotsByRecency(
   });
 }
 
-/** 현재 시각과 가장 가까운 순서로 정렬. 파싱 불가는 맨 뒤. */
+/** 현재 시각 기준 미래 도착 예정 → 최근 도착 순으로 정렬. 파싱 불가는 맨 뒤. */
 export function compareSlotsByTimeProximity(nowMs: number) {
   return (a: BaggageSlot, b: BaggageSlot): number => {
     const da = getEstimatedTimeMinutesFromNow(a, nowMs);
@@ -547,13 +547,13 @@ export function compareSlotsByTimeProximity(nowMs: number) {
     if (da === null && db === null) return compareSlotsByEstimatedArrival(a, b);
     if (da === null) return 1;
     if (db === null) return -1;
-    const ad = Math.abs(da);
-    const bd = Math.abs(db);
-    if (ad !== bd) return ad - bd;
-    // 같은 거리면 미래(+)가 과거(-)보다 먼저
-    if (da >= 0 && db < 0) return -1;
-    if (db >= 0 && da < 0) return 1;
-    return compareSlotsByEstimatedArrival(a, b);
+    const futureA = da >= 0;
+    const futureB = db >= 0;
+    // 미래 항공편을 과거 항공편보다 먼저
+    if (futureA && !futureB) return -1;
+    if (!futureA && futureB) return 1;
+    if (futureA) return da - db; // 미래: 빠른 도착 순
+    return db - da; // 과거: 최근 도착 순
   };
 }
 
