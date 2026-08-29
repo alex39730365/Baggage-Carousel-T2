@@ -16,6 +16,8 @@ export function sanitizeFlightDisplay(flight: string): string {
   return out.join(" / ").trim();
 }
 
+const compactTimeKey = (raw: string): string => raw.replace(/\D/g, "").slice(0, 12);
+
 const pickString = (obj: RawBaggageItem, keys: string[]): string => {
   for (const key of keys) {
     const value = obj[key];
@@ -166,6 +168,24 @@ const formatInstantToSeoulWall = (inst: Date): { dateKey: string; hh: number; mm
   };
 };
 
+const normalizeWallHourWithRollover = (
+  dateKey: string,
+  hh: number,
+  mm: number
+): { dateKey: string; hh: number; mm: number } => {
+  const h = ((Math.floor(hh) % 24) + 24) % 24;
+  const m = Math.max(0, Math.min(59, Math.floor(mm)));
+  const extraDays = Math.floor((Math.floor(hh) - h) / 24);
+  if (extraDays === 0 || dateKey === "unknown") {
+    return { dateKey, hh: h, mm: m };
+  }
+  const baseMs = seoulDateWallToUtcMs(dateKey, 12, 0);
+  if (baseMs === null) return { dateKey, hh: h, mm: m };
+  const shifted = new Date(baseMs + extraDays * 86_400_000);
+  const wall = formatInstantToSeoulWall(shifted);
+  return { dateKey: wall.dateKey, hh: h, mm: m };
+};
+
 /**
  * API 시각 문자열 → 서울 기준 날짜·시·분.
  * - `YYYYMMDDHHmm…` **문자열이 숫자만**일 때: 공공데이터 KST 달력으로 해석
@@ -199,11 +219,7 @@ export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number;
     ) {
       return null;
     }
-    return {
-      dateKey: `${y}-${mo}-${da}`,
-      hh: ((Math.floor(hh) % 24) + 24) % 24,
-      mm: Math.max(0, Math.min(59, Math.floor(mm))),
-    };
+    return normalizeWallHourWithRollover(`${y}-${mo}-${da}`, hh, mm);
   }
 
   const digits = t.replace(/\D/g, "");
@@ -234,11 +250,7 @@ export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number;
       ) {
         return null;
       }
-      return {
-        dateKey: `${y}-${mo}-${da}`,
-        hh: ((Math.floor(hh) % 24) + 24) % 24,
-        mm: Math.max(0, Math.min(59, Math.floor(mm))),
-      };
+      return normalizeWallHourWithRollover(`${y}-${mo}-${da}`, hh, mm);
     }
   }
 
@@ -249,27 +261,25 @@ export function parseSeoulWallClock(raw: string): { dateKey: string; hh: number;
 
   const hm = t.match(/(\d{1,2}):(\d{2})/);
   if (hm && digits.length >= 8) {
-    let h = Number(hm[1]);
+    const h = Number(hm[1]);
     const m = Number(hm[2]);
     if (Number.isFinite(h) && Number.isFinite(m)) {
-      h = ((Math.floor(h) % 24) + 24) % 24;
       const dateKey = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-      return { dateKey, hh: h, mm: Math.max(0, Math.min(59, Math.floor(m))) };
+      return normalizeWallHourWithRollover(dateKey, h, m);
     }
   }
 
   if (digits.length >= 8) {
     const dateKey = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
     const hh = digits.length >= 10 ? Number(digits.slice(8, 10)) : 0;
-    if (Number.isFinite(hh)) return { dateKey, hh: ((Math.floor(hh) % 24) + 24) % 24, mm: 0 };
+    if (Number.isFinite(hh)) return normalizeWallHourWithRollover(dateKey, hh, 0);
   }
 
   if (hm) {
-    let h = Number(hm[1]);
+    const h = Number(hm[1]);
     const m = Number(hm[2]);
     if (Number.isFinite(h) && Number.isFinite(m)) {
-      h = ((Math.floor(h) % 24) + 24) % 24;
-      return { dateKey: "unknown", hh: h, mm: Math.max(0, Math.min(59, Math.floor(m))) };
+      return normalizeWallHourWithRollover("unknown", h, m);
     }
   }
 
@@ -383,14 +393,9 @@ const bucketDateHour = (raw: string): { dateKey: string; hour: string } => {
 };
 
 /**
- * 자정 전후(red-eye) 지연을 허용하면서도, 날짜가 어긋난 API 응답으로
- * 날짜 탭이 사라지는 문제를 방지하기 위해 예정(schedule) 날짜를 우선 신뢰.
- *
- * - 예정 시간이 밤(>=LATE_NIGHT_SCHEDULE_HOUR)이고,
- * - 예측 시간이 익일 새벽(<EARLY_MORNING_ESTIMATED_HOUR_CUTOFF)이며,
- * - 예정→예측 시간차가 0보다 크고 MAX_CROSS_MIDNIGHT_DELAY_MS 이하이면
- *   예측 시간을 버킷 기준으로 사용해 실제 시간 흐름에 맞는 행에 배치.
- * - 그 외 날짜 불일치는 예정 시간을 유지해 탭 안정성을 보장.
+ * 자정 전후(red-eye) 및 단기 지연로 인해 예정/예측 날짜가 달라지는 경우,
+ * 예측(estimated) 시각이 실제 운항에 더 가깝다면 예측 시각을 버킷 기준으로 사용.
+ * 예정 시각이 새벽/자정을 넘어선 경우(밤 18시~익일 07시 범위 내)에 한정해 적용.
  */
 const LATE_NIGHT_SCHEDULE_HOUR = 18;
 const EARLY_MORNING_ESTIMATED_HOUR_CUTOFF = 7; // 00:00 ~ 06:59
@@ -493,6 +498,63 @@ export function compareSlotsByEstimatedArrival(a: BaggageSlot, b: BaggageSlot): 
   if (ta !== tb) return ta - tb;
   if (a.carousel !== b.carousel) return a.carousel - b.carousel;
   return a.flight.localeCompare(b.flight);
+}
+
+/** 슬롯의 표시 시각(estimatedTime)을 UTC ms로. 파싱 불가 시 null. */
+export function getEstimatedTimeUtcMs(slot: BaggageSlot): number | null {
+  const raw = (slot.estimatedTime ?? "").trim();
+  if (!raw) return null;
+  let w = parseSeoulWallClock(raw);
+  if (!w) return null;
+  if (w.dateKey === "unknown" && slot.date && slot.date !== "unknown") {
+    const wall = parseSeoulWallClock(
+      `${slot.date}T${String(w.hh).padStart(2, "0")}:${String(w.mm).padStart(2, "0")}`
+    );
+    if (wall) w = wall;
+  }
+  if (!w || w.dateKey === "unknown") return null;
+  return seoulDateWallToUtcMs(w.dateKey, w.hh, w.mm);
+}
+
+/** 슬롯의 표시 시각이 nowMs로부터 몇 분 뒤(+) 또는 앞(-)인지. 파싱 불가 시 null. */
+export function getEstimatedTimeMinutesFromNow(slot: BaggageSlot, nowMs: number): number | null {
+  const ms = getEstimatedTimeUtcMs(slot);
+  if (ms === null) return null;
+  return Math.round((ms - nowMs) / 60_000);
+}
+
+export const DEFAULT_MAX_PAST_HOURS = 12;
+
+/** nowMs 기준 maxPastHours 이상 지난 과거 데이터를 제외. 미래·파싱 불가는 유지. */
+export function filterSlotsByRecency(
+  slots: BaggageSlot[],
+  nowMs: number,
+  maxPastHours: number = DEFAULT_MAX_PAST_HOURS
+): BaggageSlot[] {
+  const cutoff = nowMs - maxPastHours * 60 * 60 * 1000;
+  return slots.filter((slot) => {
+    const ms = getEstimatedTimeUtcMs(slot);
+    if (ms === null) return true;
+    return ms >= cutoff;
+  });
+}
+
+/** 현재 시각과 가장 가까운 순서로 정렬. 파싱 불가는 맨 뒤. */
+export function compareSlotsByTimeProximity(nowMs: number) {
+  return (a: BaggageSlot, b: BaggageSlot): number => {
+    const da = getEstimatedTimeMinutesFromNow(a, nowMs);
+    const db = getEstimatedTimeMinutesFromNow(b, nowMs);
+    if (da === null && db === null) return compareSlotsByEstimatedArrival(a, b);
+    if (da === null) return 1;
+    if (db === null) return -1;
+    const ad = Math.abs(da);
+    const bd = Math.abs(db);
+    if (ad !== bd) return ad - bd;
+    // 같은 거리면 미래(+)가 과거(-)보다 먼저
+    if (da >= 0 && db < 0) return -1;
+    if (db >= 0 && da < 0) return 1;
+    return compareSlotsByEstimatedArrival(a, b);
+  };
 }
 
 /** 격자 `date`·`hour` 행은 표시 시각 우선으로 맞춤 — 병합·캐시 후에도 `normalizeItem`과 동일 규칙 */
@@ -610,17 +672,20 @@ const resolveGroupDate = (group: BaggageSlot[]): string => {
 };
 
 /**
- * 동일 편(적재대 무시)이 여러 줄이면 하나만 남김. 호출부 배치는 **하루치·한 날짜** 단위(편명만으로 그룹핑 안전).
+ * 동일 편·적재대·표시 시각이 같은 여러 줄은 하나로 묶는다.
+ * 호출부는 **하루치·한 날짜** 단위이므로 편명+시각+적재대 단위 그룹핑이 안전하다.
  */
 export function collapseDuplicateFlightsPreferClassified(slots: BaggageSlot[]): BaggageSlot[] {
   const noFlightKey: BaggageSlot[] = [];
   const groups = new Map<string, BaggageSlot[]>();
   for (const s of slots) {
-    const fk = canonicalFlightDedupeKey(s.flight);
-    if (!fk) {
+    const flight = canonicalFlightDedupeKey(s.flight);
+    if (!flight) {
       noFlightKey.push(s);
       continue;
     }
+    const timeKey = compactTimeKey(s.estimatedTime);
+    const fk = `${flight}|${s.carousel}|${timeKey}`;
     const g = groups.get(fk) ?? [];
     g.push(s);
     groups.set(fk, g);
@@ -643,13 +708,14 @@ export function collapseDuplicateFlightsPreferClassified(slots: BaggageSlot[]): 
 }
 
 /**
- * 같은 날짜·적재대·편명은 한 칸으로 본다. (`hour`는 제외 — 예정 시각이 바뀌면 행이 옮겨가야 하므로)
+ * 같은 날짜·적재대·편명·표시 시각은 한 칸으로 본다. (`hour`는 제외 — 예정 시각이 바뀌면 행이 옮겨가야 하므로)
  * `typeOfFlight`는 키에 넣지 않는다 — 고정 행은 빈 값이라 API 행과 이중 표시되기 때문.
  * 저장된 강조 키(`…|시간대|…`)는 이전 버전과 달라질 수 있음.
  */
 export function getSlotDedupeKey(slot: BaggageSlot): string {
   const flight = canonicalFlightDedupeKey(slot.flight);
-  return `${slot.date}|${slot.carousel}|${flight}`;
+  const timeKey = compactTimeKey(slot.estimatedTime);
+  return `${slot.date}|${slot.carousel}|${flight}|${timeKey}`;
 }
 
 const hourBucketLead = (h: string): number => {
