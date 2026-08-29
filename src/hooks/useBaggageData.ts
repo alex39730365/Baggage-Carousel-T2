@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildHourRows,
-  compareSlotsByEstimatedArrival,
+  compareSlotsByTimeProximity,
   dedupeBaggageSlots,
   fetchBaggageSlots,
+  filterSlotsByRecency,
   mergeSlotsForDate,
   sanitizeFetchErrorBody,
   sanitizeFlightDisplay,
@@ -234,7 +235,9 @@ export function useBaggageData() {
   const slots = useMemo(() => {
     if (!selectedDate) return [];
     const list = dedupeBaggageSlots(slotsByDate[selectedDate] ?? []);
-    return list.filter(keepSlotWithFlightModeOrFixed);
+    const filtered = list.filter(keepSlotWithFlightModeOrFixed);
+    const now = Date.now();
+    return filterSlotsByRecency(filtered, now).sort(compareSlotsByTimeProximity(now));
   }, [slotsByDate, selectedDate]);
 
   const byHourCarousel = useMemo(() => {
@@ -246,7 +249,7 @@ export function useBaggageData() {
       map.set(key, list);
     }
     for (const list of map.values()) {
-      list.sort(compareSlotsByEstimatedArrival);
+      list.sort(compareSlotsByTimeProximity(Date.now()));
     }
     return map;
   }, [slots]);

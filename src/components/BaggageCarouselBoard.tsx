@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaggageData } from "../hooks/useBaggageData";
 import {
-  compareSlotsByEstimatedArrival,
+  compareSlotsByTimeProximity,
+  DEFAULT_MAX_PAST_HOURS,
   diffMinutesArrivalToLastBaggage,
+  filterSlotsByRecency,
   getSlotDedupeKey,
   getSortableMinuteOfDay,
   isBagLastTimePassed,
@@ -735,12 +737,14 @@ export default function BaggageCarouselBoard() {
   );
 
   const visibleSlots = useMemo(() => {
+    const now = Date.now();
     let list = excludeOutboundFlights(filterByTab(slots, activeTab));
     /** 코드셰어 표기 숨김 — 항상 적용(요청사항) */
     list = list.filter((slot) => shouldKeepSlotWithKeCodeshareFilter(slot.flight));
+    list = filterSlotsByRecency(list, now, DEFAULT_MAX_PAST_HOURS);
     // 화면 단계에서는 같은 편명 슬롯을 강제 1개로 줄이지 않는다.
     // 그래야 API 갱신으로 시간/적재대가 이동할 때 실제 이동이 그대로 보인다.
-    return list.sort(compareSlotsByEstimatedArrival);
+    return list.sort(compareSlotsByTimeProximity(now));
   }, [slots, activeTab]);
 
   const listSheetSlotItem = useMemo(() => {
@@ -802,8 +806,9 @@ export default function BaggageCarouselBoard() {
       list.push(slot);
       map.set(key, list);
     }
+    const byProximity = compareSlotsByTimeProximity(Date.now());
     for (const list of map.values()) {
-      list.sort(compareSlotsByEstimatedArrival);
+      list.sort(byProximity);
     }
     return map;
   }, [visibleSlots]);
@@ -811,8 +816,17 @@ export default function BaggageCarouselBoard() {
   const searchRows = useMemo(() => {
     const q = keyword.trim().toUpperCase();
     if (!q) return [];
-    const matches = visibleSlots
-      .filter((slot) => slot.flight.toUpperCase().includes(q))
+    const now = Date.now();
+    const byProximity = compareSlotsByTimeProximity(now);
+    const unique = new Map<string, BaggageSlot>();
+    for (const slot of visibleSlots) {
+      if (!slot.flight.toUpperCase().includes(q)) continue;
+      const dedupeKey = getSlotDedupeKey(slot);
+      if (!unique.has(dedupeKey)) unique.set(dedupeKey, slot);
+    }
+    return [...unique.values()]
+      .sort(byProximity)
+      .slice(0, 20)
       .map((slot) => ({
         dedupeKey: getSlotDedupeKey(slot),
         sortMin: getSortableMinuteOfDay(slot),
@@ -821,19 +835,6 @@ export default function BaggageCarouselBoard() {
         time: formatTime(slot.estimatedTime),
         carousel: slot.carousel,
       }));
-
-    const unique = new Map<string, (typeof matches)[number]>();
-    for (const row of matches) {
-      if (!unique.has(row.dedupeKey)) unique.set(row.dedupeKey, row);
-    }
-    return [...unique.values()]
-      .sort(
-        (a, b) =>
-          a.sortMin - b.sortMin ||
-          a.carousel - b.carousel ||
-          `${a.hour}-${a.flight}`.localeCompare(`${b.hour}-${b.flight}`)
-      )
-      .slice(0, 20);
   }, [keyword, visibleSlots]);
 
   const availableDates = useMemo(() => Object.keys(slotsByDate).sort(), [slotsByDate]);
@@ -850,8 +851,9 @@ export default function BaggageCarouselBoard() {
       inner.set(getSlotDedupeKey(slot), slot);
     }
     const out = new Map<string, BaggageSlot[]>();
+    const byProximity = compareSlotsByTimeProximity(Date.now());
     for (const [hour, inner] of map) {
-      const list = [...inner.values()].sort(compareSlotsByEstimatedArrival);
+      const list = [...inner.values()].sort(byProximity);
       out.set(hour, list);
     }
     return out;
