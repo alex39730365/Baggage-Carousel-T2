@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaggageData } from "../hooks/useBaggageData";
 import {
+  compareSlotsByEstimatedArrival,
   compareSlotsByTimeProximity,
   DEFAULT_MAX_PAST_HOURS,
   diffMinutesArrivalToLastBaggage,
@@ -806,9 +807,8 @@ export default function BaggageCarouselBoard() {
       list.push(slot);
       map.set(key, list);
     }
-    const byProximity = compareSlotsByTimeProximity(Date.now());
     for (const list of map.values()) {
-      list.sort(byProximity);
+      list.sort(compareSlotsByEstimatedArrival);
     }
     return map;
   }, [visibleSlots]);
@@ -851,9 +851,8 @@ export default function BaggageCarouselBoard() {
       inner.set(getSlotDedupeKey(slot), slot);
     }
     const out = new Map<string, BaggageSlot[]>();
-    const byProximity = compareSlotsByTimeProximity(Date.now());
     for (const [hour, inner] of map) {
-      const list = [...inner.values()].sort(byProximity);
+      const list = [...inner.values()].sort(compareSlotsByEstimatedArrival);
       out.set(hour, list);
     }
     return out;
