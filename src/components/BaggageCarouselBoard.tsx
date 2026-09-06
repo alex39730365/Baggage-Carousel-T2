@@ -992,12 +992,20 @@ export default function BaggageCarouselBoard() {
               <p className="text-left text-sm font-medium text-[#1e40af]">데이터를 불러오는 중...</p>
             )}
           </div>
-          <div aria-live="assertive" aria-atomic="true" className="space-y-1">
-            {error && <p className="text-left text-sm font-medium text-red-600">오류: {error}</p>}
+          <div aria-live="assertive" aria-atomic="true" className="space-y-2">
+            {error && (
+              <div className="rounded-lg border-2 border-red-200 bg-red-50 px-4 py-6 text-center shadow-sm">
+                <p className="text-2xl font-bold text-red-700">접속불가</p>
+                <p className="mt-2 text-sm font-medium text-red-700">{error}</p>
+              </div>
+            )}
             {refreshError && (
-              <p className="text-left text-sm font-medium text-amber-800">
-                갱신 실패(이전 데이터 표시): {refreshError}
-              </p>
+              <div className="rounded-lg border-2 border-amber-200 bg-amber-50 px-4 py-6 text-center shadow-sm">
+                <p className="text-2xl font-bold text-amber-800">접속불가</p>
+                <p className="mt-2 text-sm font-medium text-amber-800">
+                  갱신 실패(이전 데이터 표시): {refreshError}
+                </p>
+              </div>
             )}
           </div>
         </div>
