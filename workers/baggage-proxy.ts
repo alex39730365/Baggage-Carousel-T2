@@ -21,11 +21,26 @@ export interface Env {
 const DEFAULT_SERVICE_KEY =
   "21c3a7130b45aa44a1f4c71804810b183e48a420fbb8a26721466ad626a0c6ea";
 
+/**
+ * 주의: `getBaggageArrivals`는 존재하지 않는(폐기된) 엔드포인트입니다
+ * (공공데이터 포털이 `NO_OPENAPI_SERVICE_ERROR`를 반환함).
+ * 실제 사용 가능한 엔드포인트는 `getFltArrivalsBaggageClaimDesk`이며,
+ * `api/baggage-arrivals.ts`(Vercel 함수)에서도 동일한 엔드포인트를 사용 중입니다.
+ */
 const DEFAULT_UPSTREAM_BASE_URL =
-  "https://apis.data.go.kr/B551177/statusOfBaggageClaimDesk/getBaggageArrivals";
+  "https://apis.data.go.kr/B551177/statusOfBaggageClaimDesk/getFltArrivalsBaggageClaimDesk";
 
 /** Edge에서 5분(300s) 캐시 — 공공데이터 서버 부하 완화 */
 const CACHE_TTL_SECONDS = 300;
+
+/** 업스트림이 완전히 죽었을 때도 이전 성공 응답을 얼마나 오래 재사용할지(초) */
+const STALE_FALLBACK_TTL_SECONDS = 30 * 60;
+
+/** 업스트림 응답이 이 시간(ms) 안에 오지 않으면 포기하고 재시도/폴백으로 넘어감 */
+const UPSTREAM_TIMEOUT_MS = 45_000;
+
+/** 업스트림이 느리거나 순간적으로 실패할 때 몇 번까지 다시 시도할지 */
+const MAX_ATTEMPTS = 2;
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -40,8 +55,35 @@ function withCors(headers: HeadersInit = {}): Headers {
   return h;
 }
 
+/** stale 폴백 저장용 캐시 키 — 클라이언트별 쿼리와 무관하게 "마지막 성공 응답" 하나만 보관 */
+function staleFallbackCacheKey(request: Request): Request {
+  const url = new URL(request.url);
+  url.search = "";
+  url.pathname = "/__stale_fallback__";
+  return new Request(url.toString(), { method: "GET" });
+}
+
+async function fetchUpstreamOnce(upstreamUrl: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(upstreamUrl, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+      // Cloudflare Edge 캐시: 5분간 동일 요청 캐싱하여 업스트림 호출 횟수 감소
+      cf: {
+        cacheTtl: CACHE_TTL_SECONDS,
+        cacheEverything: true,
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: withCors() });
     }
@@ -66,33 +108,64 @@ export default {
     if (!upstreamUrl.searchParams.has("type")) upstreamUrl.searchParams.set("type", "json");
     upstreamUrl.searchParams.set("serviceKey", serviceKey);
 
-    try {
-      const upstreamResponse = await fetch(upstreamUrl.toString(), {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        // Cloudflare Edge 캐시: 5분간 동일 요청 캐싱하여 업스트림 호출 횟수 감소
-        cf: {
-          cacheTtl: CACHE_TTL_SECONDS,
-          cacheEverything: true,
-        },
-      });
+    const cache = caches.default;
+    const staleKey = staleFallbackCacheKey(request);
 
-      const body = await upstreamResponse.text();
-      const contentType = upstreamResponse.headers.get("Content-Type") || "application/json; charset=utf-8";
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const upstreamResponse = await fetchUpstreamOnce(upstreamUrl.toString(), UPSTREAM_TIMEOUT_MS);
+        const body = await upstreamResponse.text();
+        const contentType = upstreamResponse.headers.get("Content-Type") || "application/json; charset=utf-8";
 
+        if (!upstreamResponse.ok) {
+          lastError = new Error(`Upstream responded with ${upstreamResponse.status}`);
+          continue;
+        }
+
+        const response = new Response(body, {
+          status: upstreamResponse.status,
+          headers: withCors({
+            "Content-Type": contentType,
+            "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}`,
+            "X-Baggage-Proxy": "LIVE",
+          }),
+        });
+
+        // 다음 완전 장애 시 서빙할 stale 폴백 저장(비동기, 응답 지연 없음)
+        const toCache = new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": `public, max-age=${STALE_FALLBACK_TTL_SECONDS}`,
+          },
+        });
+        ctx.waitUntil(cache.put(staleKey, toCache));
+
+        return response;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    // 업스트림이 완전히 실패 — 마지막 성공 응답(stale)이 있으면 그것으로 응답
+    const stale = await cache.match(staleKey);
+    if (stale) {
+      const body = await stale.text();
       return new Response(body, {
-        status: upstreamResponse.status,
+        status: 200,
         headers: withCors({
-          "Content-Type": contentType,
-          "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}`,
+          "Content-Type": stale.headers.get("Content-Type") || "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Baggage-Proxy": "STALE-FALLBACK",
         }),
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return new Response(JSON.stringify({ message: `Upstream request failed: ${message}` }), {
-        status: 502,
-        headers: withCors({ "Content-Type": "application/json; charset=utf-8" }),
-      });
     }
+
+    const message = lastError instanceof Error ? lastError.message : "Unknown error";
+    return new Response(JSON.stringify({ message: `Upstream request failed: ${message}` }), {
+      status: 502,
+      headers: withCors({ "Content-Type": "application/json; charset=utf-8" }),
+    });
   },
 };
