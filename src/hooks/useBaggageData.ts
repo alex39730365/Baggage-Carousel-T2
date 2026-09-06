@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildHourRows,
+  compareSlotsByEstimatedArrival,
   compareSlotsByTimeProximity,
   dedupeBaggageSlots,
   fetchBaggageSlots,
@@ -249,7 +250,7 @@ export function useBaggageData() {
       map.set(key, list);
     }
     for (const list of map.values()) {
-      list.sort(compareSlotsByTimeProximity(Date.now()));
+      list.sort(compareSlotsByEstimatedArrival);
     }
     return map;
   }, [slots]);
