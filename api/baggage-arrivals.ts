@@ -1,4 +1,8 @@
 import { createClient } from "@vercel/kv";
+import https from "https";
+import http from "http";
+import { URL } from "url";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "zlib";
 
 /** 공공데이터 포털 기본 엔드포인트 — `BAGGAGE_DATA_UPSTREAM_URL`로 교체 가능 */
 const DEFAULT_PAGINATED_UPSTREAM_BASE =
@@ -44,11 +48,11 @@ const SNAPSHOT_LOCK_KEY = "baggage:snapshot-lock-v3";
  * Redis 키 TTL(초) — 물리 보관은 길게(업스트림 실패 시 STALE 폴백용).
  * 논리상 "신선" 여부는 tryReadKvSnapshot의 UPSTREAM_CACHE_TTL_MS로만 판단.
  */
-const SNAPSHOT_KV_TTL_SEC = 15 * 60;
+const SNAPSHOT_KV_TTL_SEC = 60 * 60;
 const LOCK_TTL_SEC = 50;
 
 /** 업스트림 오류 시에도 응답 가능한 최대 스냅샷 나이 */
-const STALE_FALLBACK_MAX_MS = 15 * 60 * 1000;
+const STALE_FALLBACK_MAX_MS = 60 * 60 * 1000;
 
 /** 1분 폴링 대시보드 — CDN·브라우저에 JSON 고착 방지 */
 const successCacheControl = () => "private, no-cache, no-store, must-revalidate";
@@ -123,6 +127,95 @@ async function getStaleFallbackPayload(
   }
 }
 
+type MinimalResponse = {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+};
+
+function decompressBody(buffer: Buffer, encoding?: string): Buffer {
+  if (!encoding) return buffer;
+  const enc = encoding.toLowerCase();
+  if (enc === "gzip") return gunzipSync(buffer);
+  if (enc === "deflate") return inflateSync(buffer);
+  if (enc === "br") return brotliDecompressSync(buffer);
+  return buffer;
+}
+
+function requestOnce(
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; timeout?: number }
+): Promise<MinimalResponse> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === "https:" ? https : http;
+    const timeout = init?.timeout ?? 25_000;
+
+    const req = lib.get(
+      u.toString(),
+      { headers: init?.headers, timeout },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          try {
+            const raw = Buffer.concat(chunks);
+            const encoding = Array.isArray(res.headers["content-encoding"])
+              ? res.headers["content-encoding"][0]
+              : res.headers["content-encoding"];
+            const decoded = decompressBody(raw, encoding);
+            const text = decoded.toString("utf-8");
+            const status = res.statusCode ?? 0;
+            resolve({ ok: status >= 200 && status < 300, status, text: async () => text });
+          } catch (err) {
+            reject(err);
+          }
+        });
+        res.on("error", (err) => reject(err));
+      }
+    );
+
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`Request timeout after ${timeout}ms for ${url}`));
+    }, timeout);
+
+    req.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    req.on("timeout", () => {
+      clearTimeout(timer);
+      req.destroy(new Error(`Request timeout after ${timeout}ms for ${url}`));
+    });
+    req.on("close", () => clearTimeout(timer));
+  });
+}
+
+async function fetchWithNode(
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; timeout?: number },
+  retryOptions: { retries?: number; retryDelay?: number } = {}
+): Promise<MinimalResponse> {
+  const { retries = 1, retryDelay = 1000 } = retryOptions;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await requestOnce(url, init);
+      if (!res.ok && res.status >= 500 && attempt < retries) {
+        await new Promise((r) => setTimeout(r, retryDelay * (attempt + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, retryDelay * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
 const extractItems = (json: any): any[] => {
   const itemsNode = json?.response?.body?.items;
   if (Array.isArray(itemsNode)) return itemsNode;
@@ -161,7 +254,7 @@ async function fetchOnePage(
   query.set("searchDay", String(searchDay));
   const target = `${paginatedUpstreamBase()}?${query.toString()}`;
 
-  const response = await fetch(target, { method: "GET" });
+  const response = await fetchWithNode(target, { method: "GET" });
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`Upstream failed (${response.status})`);
@@ -184,7 +277,7 @@ async function fetchUpstreamFromSnapshot(): Promise<CachedPayload> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (auth) headers.Authorization = auth;
 
-  const response = await fetch(url, { method: "GET", headers });
+  const response = await fetchWithNode(url, { method: "GET", headers });
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`Snapshot upstream failed (${response.status})`);
@@ -221,23 +314,35 @@ async function fetchUpstreamFromSnapshot(): Promise<CachedPayload> {
 }
 
 async function fetchUpstreamPayload(serviceKey: string): Promise<CachedPayload> {
+  let anySuccess = false;
   const perDay = await Promise.all(
     SEARCH_DAYS.map(async (searchDay) => {
-      const merged: any[] = [];
-      const first = await fetchOnePage(serviceKey, searchDay, 1);
-      merged.push(...first.items);
-      const totalCount = first.totalCount;
-      const plannedPages = Math.max(1, Math.min(MAX_PAGE_PER_DAY, Math.ceil(totalCount / ROWS_PER_PAGE)));
-      if (plannedPages > 1) {
-        const rest = await Promise.all(
-          Array.from({ length: plannedPages - 1 }, (_, i) => fetchOnePage(serviceKey, searchDay, i + 2))
-        );
-        for (const r of rest) merged.push(...r.items);
+      try {
+        const merged: any[] = [];
+        const first = await fetchOnePage(serviceKey, searchDay, 1);
+        merged.push(...first.items);
+        const totalCount = first.totalCount;
+        const plannedPages = Math.max(1, Math.min(MAX_PAGE_PER_DAY, Math.ceil(totalCount / ROWS_PER_PAGE)));
+        if (plannedPages > 1) {
+          const rest = await Promise.all(
+            Array.from({ length: plannedPages - 1 }, (_, i) => fetchOnePage(serviceKey, searchDay, i + 2))
+          );
+          for (const r of rest) merged.push(...r.items);
+        }
+        anySuccess = true;
+        return merged;
+      } catch (err) {
+        // 개별 searchDay 실패 시에도 나머지 날짜 데이터는 살린다.
+        console.error(`[baggage-arrivals] searchDay ${searchDay} failed:`, err instanceof Error ? err.message : err);
+        return [];
       }
-      return merged;
     })
   );
   const merged = perDay.flat();
+
+  if (!anySuccess) {
+    throw new Error("All upstream searchDay requests failed");
+  }
 
   const body = JSON.stringify(buildSnapshotResponse(merged));
   return {
