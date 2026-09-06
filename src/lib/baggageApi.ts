@@ -820,10 +820,15 @@ const DEV_ROWS_PER_PAGE = 1000;
 const DEV_MAX_PAGE_PER_DAY = 15;
 
 /**
- * 기본: 동일 출처 `/api/baggage-arrivals`.
- * 정적 사이트 + 별도 API 게이트웨이 시 빌드 전 `VITE_BAGGAGE_ARRIVALS_URL`에 전체 URL 설정 (슬래시 없이 끝나도 됨).
+ * 우선순위: `VITE_WORKER_API_URL`(Cloudflare Worker 프록시) → `VITE_BAGGAGE_ARRIVALS_URL`
+ * (커스텀 게이트웨이) → 동일 출처 `/api/baggage-arrivals`(Vercel 함수, 폴백).
+ *
+ * Vercel 서버리스 함수는 공공데이터 서버 응답 지연 시 504로 실패하는 경우가 있어,
+ * Cloudflare Worker 프록시(Edge 캐싱 포함)로 우선 라우팅한다.
  */
 export function getBaggageArrivalsBaseUrl(): string {
+  const worker = (import.meta.env.VITE_WORKER_API_URL ?? "").trim().replace(/\/$/, "");
+  if (worker) return worker;
   const v = (import.meta.env.VITE_BAGGAGE_ARRIVALS_URL ?? "").trim().replace(/\/$/, "");
   return v || "/api/baggage-arrivals";
 }
